@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "title": "PI Factory Review Report",
+  "required": [
+    "taskId",
+    "reviewer",
+    "verdict",
+    "summary",
+    "findings",
+    "limitations"
+  ],
+  "properties": {
+    "taskId": {
+      "type": "string",
+      "pattern": "^T[0-9]{3,}$"
+    },
+    "reviewer": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "verdict": {
+      "enum": [
+        "approved",
+        "changes_requested",
+        "blocked"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/finding"
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "$defs": {
+    "finding": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "severity",
+        "description",
+        "evidence",
+        "requiredAction"
+      ],
+      "properties": {
+        "severity": {
+          "enum": [
+            "blocking",
+            "advisory"
+          ]
+        },
+        "file": {
+          "type": "string"
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidence": {
+          "type": "string",
+          "minLength": 1
+        },
+        "requiredAction": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

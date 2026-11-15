@@ -1,0 +1,30 @@
+{
+  "agents": {
+    "planner": {
+      "provider": "openai-codex",
+      "model": "gpt-6.1-terra",
+      "timeoutMs": 300000
+    },
+    "implementer": {
+      "provider": "openai-codex",
+      "model": "gpt-6.1-terra",
+      "timeoutMs": 600000
+    },
+    "reviewer": {
+      "provider": "openai-codex",
+      "model": "gpt-6.1-terra",
+      "timeoutMs": 300000
+    }
+  },
+  "execution": {
+    "maxAttempts": 3,
+    "requireApprovalBeforeExecution": true
+  },
+  "verification": [
+    {
+      "executable": "node",
+      "args": [ "--test" ],
+      "timeoutMs": 120000
+    }
+  ]
+}

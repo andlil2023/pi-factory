@@ -1,0 +1,1 @@
+Build a command-line calculator that supports addition and subtraction. Use the existing language and tooling in the target repository if available. Include tests and helpful errors for invalid input.

@@ -1,0 +1,7 @@
+{
+  "provider": "openai",
+  "model": "REPLACE_WITH_PI_MODEL_ID",
+  "piExecutable": "pi",
+  "timeoutMs": 300000,
+  "maxAttempts": 3
+}

@@ -1,0 +1,123 @@
+import { mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
+import { randomUUID } from 'node:crypto';
+
+export type TaskStatus = 'pending' | 'running' | 'needs_review' | 'repair_pending' | 'completed' | 'blocked';
+export type AttemptOutcome = 'implemented' | 'failed' | 'blocked' | 'interrupted';
+export type ReviewVerdict = 'approved' | 'changes_requested' | 'blocked';
+
+export interface AttemptRecord {
+  number: number;
+  startedAt: string;
+  finishedAt?: string;
+  outcome?: AttemptOutcome;
+  implementationReport?: unknown;
+  verification?: unknown;
+  reviews?: Array<{ reviewer: string; verdict: ReviewVerdict; report: unknown }>;
+  checkpointCommit?: string;
+}
+
+export interface TaskState {
+  id: string;
+  status: TaskStatus;
+  attempts: AttemptRecord[];
+  lastError?: string;
+  checkpointCommit?: string;
+}
+
+export interface FactoryRunState {
+  version: 1;
+  runId: string;
+  repository: string;
+  createdAt: string;
+  updatedAt: string;
+  status: 'planned' | 'running' | 'paused' | 'completed' | 'blocked';
+  plan: unknown;
+  finalVerification?: { passed: boolean; details: unknown; checkedAt: string; head?: string };
+  tasks: Record<string, TaskState>;
+}
+
+function assertRunId(runId: string): void {
+  if (!/^[a-zA-Z0-9_-]+$/.test(runId)) throw new Error('Invalid run ID');
+}
+
+function validateState(value: unknown, expectedRunId: string): asserts value is FactoryRunState {
+  if (!value || typeof value !== 'object') throw new Error('Invalid run state');
+  const state = value as Partial<FactoryRunState>;
+  if (state.version !== 1 || state.runId !== expectedRunId || !state.tasks || typeof state.tasks !== 'object' || Array.isArray(state.tasks)) {
+    throw new Error('Invalid or unsupported run state');
+  }
+}
+
+export class StateStore {
+  readonly directory: string;
+
+  constructor(repository: string) {
+    this.directory = join(resolve(repository), '.factory', 'runs');
+  }
+
+  private path(runId: string): string {
+    assertRunId(runId);
+    return join(this.directory, `${runId}.json`);
+  }
+
+  async create(repository: string, plan: unknown, taskIds: string[], runId: string = randomUUID()): Promise<FactoryRunState> {
+    assertRunId(runId);
+    if (new Set(taskIds).size !== taskIds.length || taskIds.length === 0) throw new Error('Task IDs must be unique and nonempty');
+    const now = new Date().toISOString();
+    const tasks: Record<string, TaskState> = Object.fromEntries(taskIds.map((id): [string, TaskState] => [id, { id, status: 'pending', attempts: [] }]));
+    const state: FactoryRunState = {
+      version: 1, runId, repository: resolve(repository), createdAt: now, updatedAt: now,
+      status: 'planned', plan, tasks
+    };
+    await mkdir(this.directory, { recursive: true });
+    const handle = await open(this.path(runId), 'wx');
+    try { await handle.writeFile(JSON.stringify(state, null, 2) + '\n'); }
+    finally { await handle.close(); }
+    return state;
+  }
+
+  async load(runId: string): Promise<FactoryRunState> {
+    const value: unknown = JSON.parse(await readFile(this.path(runId), 'utf8'));
+    validateState(value, runId);
+    return value;
+  }
+
+  /** Persist a full state snapshot. Caller must serialize updates per run. */
+  async save(state: FactoryRunState): Promise<void> {
+    validateState(state, state.runId);
+    const path = this.path(state.runId);
+    const temporary = `${path}.${randomUUID()}.tmp`;
+    const updated = { ...state, updatedAt: new Date().toISOString() };
+    await mkdir(dirname(path), { recursive: true });
+    try {
+      await writeFile(temporary, JSON.stringify(updated, null, 2) + '\n', { flag: 'wx' });
+      await rename(temporary, path);
+    } finally {
+      await rm(temporary, { force: true });
+    }
+    state.updatedAt = updated.updatedAt;
+  }
+
+  /** Mark incomplete process work as interrupted on restart; never silently retry. */
+  async recover(runId: string): Promise<FactoryRunState> {
+    const state = await this.load(runId);
+    let changed = false;
+    for (const task of Object.values(state.tasks)) {
+      if (task.status !== 'running') continue;
+      const attempt = task.attempts.at(-1);
+      if (attempt && !attempt.finishedAt) {
+        attempt.finishedAt = new Date().toISOString();
+        attempt.outcome = 'interrupted';
+      }
+      task.status = 'blocked';
+      task.lastError = 'Execution interrupted; inspect working tree before resuming';
+      changed = true;
+    }
+    if (changed) {
+      state.status = 'paused';
+      await this.save(state);
+    }
+    return state;
+  }
+}
