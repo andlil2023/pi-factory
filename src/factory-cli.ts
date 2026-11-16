@@ -13,7 +13,7 @@ import { spawn } from 'node:child_process';
 import type { ReviewRouting } from './review-routing.ts';
 import { validateUiEvidenceCommand, type UiEvidenceCommand } from './ui-evidence.ts';
 import { acquireRunLock } from './run-lock.ts';
-import { prepareIntegration, publishIntegration, type IntegrationOptions } from './git-integration.ts';
+import { prepareIntegration, publishIntegration, publishPullRequest, hasGitRemote, type IntegrationOptions } from './git-integration.ts';
 import { captureRunGitState, configurationFingerprint, prepareRunResume, validateRunGitState, assertRunCheckpoint, MAX_GUIDANCE_LENGTH } from './run-recovery.ts';
 import { amendRunPlan } from './plan-amendment.ts';
 
@@ -327,14 +327,15 @@ async function integrateCommand(flags:Record<string,string|boolean>):Promise<voi
           uiEvidence:config.uiEvidence?{command:config.uiEvidence.command,directory:join(store.directory,runId,'integration-evidence',String(attempt))}:undefined})
       };
       const record=flags.publish===true
-        ? await publishIntegration(store,state,options,required(flags,'candidate'))
+        ? await (await hasGitRemote(repository) ? publishPullRequest : publishIntegration)(store,state,options,required(flags,'candidate'))
         : await prepareIntegration(store,state,options,flags['new-attempt']===true);
       console.log(`Integration ${record.number}: ${record.status}; worktree: ${record.worktree}`);
       if (record.commit) console.log(`Candidate: ${record.commit}`);
+      if (record.pullRequest?.url) console.log(`Pull request: ${record.pullRequest.url}`);
       if (record.error) console.log(record.error);
       if (record.conflicts?.length) console.log(`Conflicts: ${record.conflicts.join(', ')}`);
       if (record.status==='ready') console.log('Target unchanged. Inspect the candidate, then explicitly publish with --publish --candidate SHA --approve and the same repo/run/config.');
-      if (record.status!=='ready' && record.status!=='published') process.exitCode=1;
+      if (record.status!=='ready' && record.status!=='published' && record.status!=='pr-opened') process.exitCode=1;
     } finally { await releaseRun(); }
   } finally { await releaseRepository(); }
 }
