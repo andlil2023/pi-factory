@@ -12,7 +12,7 @@
     },
     "reviewer": {
       "provider": "openai-codex",
-      "model": "gpt-6.1-terra",
+      "model": "gpt-6.1-sol",
       "timeoutMs": 300000
     }
   },
@@ -20,7 +20,7 @@
   "reviewers": {
     "security": {
       "provider": "openai-codex",
-      "model": "gpt-6.1-terra",
+      "model": "gpt-6.1-sol",
       "timeoutMs": 300000
     },
     "ui": {
