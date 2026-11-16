@@ -59,7 +59,9 @@ function disclosure(title, key, openKeys) {
 function renderTask(task, maxAttempts, openKeys, key = task.id) {
   const card = node('article', undefined, 'task-card');
   const heading = node('div', undefined, 'task-heading');
-  heading.append(node('h3', task.id), badge(task.status));
+  const name = node('div', undefined, 'task-name');
+  name.append(node('h3', task.title || task.id), node('p', task.id, 'display-id'));
+  heading.append(name, badge(task.status));
   card.append(heading);
   const attempts = task.attempts || [];
   const latest = attempts[attempts.length - 1];
@@ -119,7 +121,7 @@ async function refresh() {
       const button = node('button', undefined, 'run-button'); button.type = 'button';
       button.dataset.runId = entry.runId;
       button.setAttribute('aria-pressed', String(selected === entry.runId));
-      button.append(node('span', entry.runId, 'run-name'));
+      button.append(node('span', entry.available && entry.run?.label || entry.runId, 'run-name'), node('span', entry.runId, 'display-id'));
       const meta = node('span', undefined, 'run-meta');
       meta.append(badge(entry.available ? entry.run.status : 'unavailable'), node('span', entry.available ? age(entry.run.updatedAt) : 'Cannot read state'));
       button.append(meta);
@@ -139,7 +141,8 @@ function showDetails(entry) {
   const details = $('details');
   const openKeys = new Set(Array.from(details.querySelectorAll('details[open]'), item => item.dataset.key));
   details.replaceChildren();
-  $('detail-heading').textContent = entry.runId;
+  $('detail-heading').textContent = entry.available && entry.run?.label || entry.runId;
+  details.append(node('p', entry.runId, 'display-id'));
   if (!entry.available) {
     $('detail-status').textContent = 'Run unavailable';
     details.append(node('div', 'This run’s persisted state is missing or unreadable. Try refreshing.', 'empty-state'));
@@ -151,6 +154,9 @@ function showDetails(entry) {
   const active = tasks.filter(task => ['running', 'needs_review', 'repair_pending'].includes(task.status)).length;
   const blocked = tasks.filter(task => task.status === 'blocked' || task.lastError || task.attempts?.at(-1)?.blockers?.length).length;
   $('detail-status').textContent = `Last persisted state · updated ${age(run.updatedAt)} · ${run.updatedAt}`;
+  if (run.objectiveSummary) {
+    details.append(node('h3', 'Intended work', 'subheading'), node('p', run.objectiveSummary, 'objective-summary'));
+  }
   details.append(badge(run.status));
   const stats = node('div', undefined, 'stats');
   for (const [value, title] of [[`${completed}/${tasks.length}`, 'Tasks completed'], [active, 'Active / in review'], [blocked, 'Need attention'], [tasks.reduce((sum, task) => sum + (task.budgetUsed || 0), 0), 'Attempts used']]) {

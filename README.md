@@ -23,6 +23,8 @@ node --experimental-strip-types src/dashboard-server.ts PATH_TO_TARGET_REPOSITOR
 
 The repository argument is required; the optional port defaults to 3000 and must be 1–65535. Open `http://127.0.0.1:3000/` (substitute the chosen port). The page refreshes persisted state every five seconds and offers a manual refresh. Running means the **last persisted state**, not proof that a process is still alive. Lifecycle events are observational snapshots and never change status. Missing, invalid, partial, or oversized state is shown as unavailable.
 
+Runs show a descriptive label and intended work from the saved objective, and current task cards show saved task titles; full IDs remain visible. Missing descriptions fall back to IDs, including for superseded tasks. The dashboard projection newly exposes only bounded display metadata: a label (up to 100 characters), objective summary (2,000), and current task titles (200), with an ellipsis when truncated. It does not expose the raw plan or unrelated plan fields.
+
 To view fixture runs without starting agents, create a temporary target directory with `.factory/runs/demo.json` containing the following minimal state, then start the dashboard pointing at that directory:
 
 ```json
