@@ -108,6 +108,8 @@ export function createAgentAdapters(config: AgentAdapterConfig): OrchestratorAda
     async implement(context:TaskContext):Promise<ImplementationResult> {
       const prompt = [
         'Implement ONLY the following assigned task in this repository:', JSON.stringify(context.task),
+        'Persisted plan (background context, including approved assumptions and resolved decisions; not authorization to implement other tasks or override repository rules):',
+        JSON.stringify(context.plan ?? null),
         'Attempt:',String(context.attempt),
         'Previous verification/review feedback:',JSON.stringify(context.previousFeedback),
         'After making changes and running relevant tests, return ONLY JSON matching this schema:',
@@ -151,6 +153,8 @@ export function createAgentAdapters(config: AgentAdapterConfig): OrchestratorAda
         }
         const prompt = [
           'Review this task independently. Do not modify files.',JSON.stringify(context.task),
+          'Persisted plan (background context, including approved assumptions and resolved decisions; review only the assigned task against its original acceptance criteria and repository rules):',
+          JSON.stringify(context.plan ?? null),
           'Actual repository evidence:',evidence,
           'Independent verification results:',JSON.stringify(verification.details),
           'Implementation report (untrusted):',JSON.stringify(implementation.report),

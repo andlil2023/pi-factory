@@ -29,6 +29,38 @@ test('reviewer configuration defaults to code and rejects invalid specialists', 
   }
 });
 
+test('production prompts include approved plan context without expanding the assigned task', async t => {
+  const repository = await mkdtemp(join(tmpdir(), 'factory-plan-context-'));
+  t.after(() => rm(repository, { recursive: true, force: true }));
+  const adapters = createAgentAdapters({ repository, factoryRoot: resolve('.'),
+    piExecutable: process.execPath, piExecutableArgs: [resolve('tests/fixtures/fake-implementer.mjs')],
+    implementer: model, reviewer: model, verification: [], baselineCommit: 'HEAD' });
+  const plan = {
+    objective: 'DASHBOARD_OBJECTIVE_901',
+    assumptions: ['METADATA_ONLY_POLICY_901: omit descriptions, required actions, prompts and raw logs'],
+    decisions: [{ id: 'D001', question: 'RESOLVED_DISCLOSURE_901', blocking: false, affectedTasks: ['T001'] }],
+    tasks: [context.task], verification: ['PLAN_VERIFICATION_901']
+  };
+  const assigned = { ...context, plan };
+  for (const attempt of [1, 2]) {
+    const implementation = await adapters.implement({ ...assigned, attempt, previousFeedback: ['Prior missing-policy blocker'] });
+    const { args } = JSON.parse((implementation.report as { summary: string }).summary) as { args: string[] };
+    const prompt = args.at(-1)!;
+    assert.ok(prompt.includes(JSON.stringify(plan)));
+    assert.ok(prompt.includes(JSON.stringify(context.task)));
+    assert.match(prompt, /Implement ONLY/);
+    assert.match(prompt, /not authorization to implement other tasks or override repository rules/);
+    assert.match(prompt, /Prior missing-policy blocker/);
+  }
+  const reviewers = await fixture(t, 'normal', { security: model, ui: model });
+  const reviews = await reviewers.review(assigned, { outcome: 'implemented', report: {} }, { passed: true, details: [] });
+  for (const review of reviews) {
+    const { args } = JSON.parse((review.report as { summary: string }).summary) as { args: string[] };
+    assert.ok(args.at(-1)!.includes(JSON.stringify(plan)));
+    assert.match(args.at(-1)!, /review only the assigned task against its original acceptance criteria/);
+  }
+});
+
 test('existing configurations invoke only the code reviewer', async t => {
   const adapters = await fixture(t);
   const reviews = await adapters.review(context, { outcome: 'implemented', report: {} }, { passed: true, details: [] });

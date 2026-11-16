@@ -30,6 +30,8 @@ export interface VerificationResult {
 }
 export interface TaskContext {
   task: PlannedTask;
+  /** Persisted plan, including assumptions and resolved decisions; background only. */
+  plan?: unknown;
   attempt: number;
   previousFeedback: unknown[];
   requiredReviewers?: string[];
@@ -113,7 +115,7 @@ export class Orchestrator {
           a.verification, ...(a.reviews ?? []).map(r => r.report),
           ...(a.uiEvidence && !a.uiEvidence.passed ? [a.uiEvidence] : [])
         ].filter(x => x !== undefined));
-        const context: TaskContext = { task: ready, attempt: attempt.number, previousFeedback: feedback };
+        const context: TaskContext = { task: ready, plan: structuredClone(state.plan), attempt: attempt.number, previousFeedback: feedback };
         if (attempt.number > 1) this.options.events?.emit({type:'REPAIR_STARTED',taskId:ready.id,attempt:attempt.number});
         try {
           this.options.events?.emit({type:'AGENT_STARTED',taskId:ready.id,agent:'implementer',attempt:attempt.number});

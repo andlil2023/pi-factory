@@ -43,6 +43,34 @@ test('review rejection causes a fresh repair attempt with feedback', async t => 
   assert.equal(calls, 4);
   assert.equal(result.tasks.T001.attempts.length, 2);
 });
+test('loaded plan context reaches every fresh attempt and reviewer without mutating persisted decisions', async t => {
+  const { store, state } = await fixture(t);
+  const plan = { objective: 'dashboard', assumptions: ['Metadata only'], decisions: [
+    { id: 'D001', question: 'Omit raw finding text', blocking: false, affectedTasks: ['T001'] }
+  ], tasks, verification: ['Check disclosure policy'] };
+  state.plan = structuredClone(plan);
+  await store.save(state);
+  const loaded = await store.load(state.runId);
+  const attempts: string[] = [];
+  const result = await new Orchestrator(store, {
+    implement: async c => {
+      assert.deepEqual(c.plan, plan);
+      attempts.push(`${c.task.id}:${c.attempt}`);
+      return { outcome: 'implemented', report: {} };
+    },
+    verify: async () => ({ passed: true, details: {} }),
+    review: async c => {
+      assert.deepEqual(c.plan, plan);
+      // Adapter-local mutations must not change persisted policy or later attempts.
+      (c.plan as typeof plan).assumptions.push('adapter mutation');
+      return [{ reviewer: 'code', verdict: c.attempt === 1 ? 'changes_requested' : 'approved', report: {} }];
+    }
+  }).execute(loaded, tasks);
+  assert.equal(result.status, 'completed');
+  assert.deepEqual(attempts, ['T001:1', 'T001:2', 'T002:1', 'T002:2']);
+  assert.deepEqual((await store.load(state.runId)).plan, plan);
+});
+
 test('missing required review blocks the run', async t => {
   const { store, state } = await fixture(t);
   const adapters: OrchestratorAdapters = {
