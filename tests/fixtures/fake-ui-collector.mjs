@@ -29,6 +29,8 @@ const manifest = {
 if (mode === 'wrong-task') manifest.taskId = 'T999';
 if (mode === 'wrong-attempt') manifest.attempt++;
 if (mode === 'stale') manifest.capturedAt = '2000-01-01T00:00:00Z';
+if (mode === 'future') manifest.capturedAt = '9999-01-01T00:00:00Z';
+if (mode === 'invalid-timestamp') manifest.capturedAt = 'not a timestamp';
 if (mode === 'fingerprint') manifest.sourceFingerprint = '0'.repeat(64);
 if (mode === 'failed-check') manifest.checks[0].status = 'failed';
 if (mode === 'missing-check') manifest.checks.pop();
