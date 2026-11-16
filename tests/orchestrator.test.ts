@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { StateStore } from '../src/state-store.ts';
+import { StateStore, consumedInfraRetries } from '../src/state-store.ts';
+import { AgentExecutionError } from '../src/agent-error.ts';
 import { Orchestrator, type PlannedTask, type OrchestratorAdapters } from '../src/orchestrator.ts';
 
 const tasks: PlannedTask[] = [
@@ -17,6 +18,54 @@ async function fixture(t: import('node:test').TestContext) {
   const state = await store.create(dir, { objective: 'demo' }, tasks.map(t => t.id), 'test-run');
   return { store, state };
 }
+for (const role of ['implementer', 'reviewer'] as const) {
+  test(`automatic ${role} retry is persisted and separate from repair attempts`, async t => {
+    const { store, state } = await fixture(t);
+    state.execution = { maxAttempts: 1, maxInfraRetries: 1, configurationFingerprint: 'test' };
+    let failed = false;
+    const adapters: OrchestratorAdapters = {
+      implement: async c => {
+        if (c.task.id === 'T001' && c.attempt === 2) {
+          assert.match(JSON.stringify(c.previousFeedback), new RegExp(`Factory retry note: ${role} failed`));
+          assert.match(JSON.stringify(c.previousFeedback), /Inspect the worktree/);
+        }
+        if (role === 'implementer' && !failed) { failed = true; throw new AgentExecutionError(role, true, 'timeout'); }
+        return { outcome: 'implemented', report: {} };
+      },
+      verify: async () => ({ passed: true, details: {} }),
+      review: async () => {
+        if (role === 'reviewer' && !failed) { failed = true; throw new AgentExecutionError(role, true, 'timeout'); }
+        return [{ reviewer: 'code', verdict: 'approved', report: {} }];
+      }
+    };
+    const result = await new Orchestrator(store, adapters, { maxAttempts: 1 }).execute(state, tasks);
+    assert.equal(result.status, 'completed');
+    const loaded = await store.load(state.runId);
+    assert.equal(consumedInfraRetries(loaded.tasks.T001), 1);
+    assert.equal(loaded.tasks.T001.attempts[0].outcome, 'error');
+    assert.equal(loaded.tasks.T001.attempts.length, 2);
+  });
+}
+
+test('exhaustion, legacy zero budget, and non-retryable errors block across reload and operator retry', async t => {
+  for (const [budget, retryable] of [[1, true], [0, true], [undefined, true], [1, false]] as const) {
+    const { store, state } = await fixture(t);
+    state.execution = { maxAttempts: 1, configurationFingerprint: 'test', ...(budget === undefined ? {} : { maxInfraRetries: budget }) };
+    const adapters: OrchestratorAdapters = {
+      implement: async () => { throw new AgentExecutionError('implementer', retryable, 'timeout'); },
+      verify: async () => ({ passed: true, details: {} }),
+      review: async () => []
+    };
+    await new Orchestrator(store, adapters, { maxAttempts: 1 }).execute(state, tasks);
+    const loaded = await store.load(state.runId);
+    assert.equal(loaded.status, 'blocked');
+    assert.equal(consumedInfraRetries(loaded.tasks.T001), retryable ? budget ?? 0 : 0);
+    loaded.tasks.T001.status = 'repair_pending';
+    await new Orchestrator(store, adapters, { maxAttempts: 1 }).execute(loaded, tasks);
+    assert.equal(consumedInfraRetries((await store.load(state.runId)).tasks.T001), retryable ? budget ?? 0 : 0);
+  }
+});
+
 test('executes dependencies in order and completes only after review', async t => {
   const { store, state } = await fixture(t);
   const calls: string[] = [];

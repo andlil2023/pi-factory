@@ -110,6 +110,27 @@ test('cancels with a large prompt when the child never consumes stdin', async t 
   await assert.rejects(pending, /cancelled/);
 });
 
+test('classifies process failures without classifying cancellation or launch failure', async t => {
+  const { dir, request } = await fixture(t);
+  for (const prompt of ['fail', 'invalid', 'empty', 'sleep']) {
+    await assert.rejects(runPi({ ...request, prompt, timeoutMs: prompt === 'sleep' ? 150 : 5000 }), (e: unknown) => {
+      assert.ok(e instanceof PiRunError);
+      assert.equal(e.retryable, true);
+      return true;
+    });
+  }
+  await assert.rejects(runPi({ ...request, executable: join(dir, 'missing') }), (e: unknown) => {
+    assert.ok(e instanceof PiRunError); assert.equal(e.retryable, false); return true;
+  });
+  const controller = new AbortController(); controller.abort();
+  await assert.rejects(runPi({ ...request, signal: controller.signal }), (e: unknown) => {
+    assert.ok(e instanceof PiRunError); assert.equal(e.retryable, false); return true;
+  });
+  await assert.rejects(runPi({ ...request, prompt: '' }), (e: unknown) => {
+    assert.ok(e instanceof PiRunError); assert.equal(e.retryable, false); return true;
+  });
+});
+
 test('rejects nonzero process exit', async (t) => {
   const { request } = await fixture(t);
   await assert.rejects(runPi({ ...request, prompt: 'fail' }), (e: unknown) => {

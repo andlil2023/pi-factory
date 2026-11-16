@@ -2,7 +2,8 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { runPi, type PiRunRequest } from './pi-runner.ts';
+import { runPi, PiRunError, type PiRunRequest } from './pi-runner.ts';
+import { AgentExecutionError } from './agent-error.ts';
 import { selectTaskReviewers, type ReviewRouting } from './review-routing.ts';
 import { collectUiEvidence, assertUiEvidenceCurrent, validateUiEvidenceCommand, type UiEvidenceConfig } from './ui-evidence.ts';
 import { ContractValidator } from './contract-validator.ts';
@@ -101,7 +102,13 @@ export function createAgentAdapters(config: AgentAdapterConfig): OrchestratorAda
       provider:model.provider, model:model.model, timeoutMs:model.timeoutMs ?? 300_000,
       tools, prompt
     };
-    return lastAssistantText((await runPi(request)).events);
+    try {
+      return lastAssistantText((await runPi(request)).events);
+    } catch (error) {
+      // Never expose process output (including PiRunError.details) to callers.
+      throw new AgentExecutionError(role, error instanceof PiRunError && error.retryable,
+        error instanceof PiRunError ? error.message : 'Unable to run agent');
+    }
   };
   return {
     ...(config.uiEvidence ? { collectUiEvidence: (context: TaskContext) => collectUiEvidence(config.uiEvidence!, { repository, taskId: context.task.id, attempt: context.attempt }, validator) } : {}),

@@ -84,7 +84,7 @@ npm run factory -- resume --repo PATH --run RUN_ID --config CONFIG_FILE --approv
 
 `amend` accepts a hand-edited plan too. Completed tasks must stay unchanged. A task with attempts is either kept unchanged or removed and replaced by tasks with new IDs; its attempt history moves to `supersededTasks` and the old plan to `planRevisions`. The factory never cleans the worktree: if the superseded task left edits, inspect and remove them yourself before `resume`.
 
-**Retry budget.** `execution.maxAttempts` counts attempts whose work was rejected by verification or review, or reported `failed`. Blocked reports, interruptions, and agent or infrastructure errors (recorded as outcome `error`) do not count: each of them already stops the run and needs an approved resume.
+**Retry budget.** `execution.maxAttempts` counts attempts whose work was rejected by verification or review, or reported `failed`. Blocked reports, interruptions, and agent or infrastructure errors (recorded as outcome `error`) do not count. Separately, `execution.maxInfraRetries` defaults to 1 automatic retry per task for PI timeouts, nonzero exits, empty or invalid event output, and prompt-send failures. This separate budget is persisted and survives resume, including operator retries; existing runs without a pinned value use zero. Other errors and exhausted infrastructure retries stop the run and require an approved resume.
 
 **Task size gate.** `plan`, `run`, `replan`, and `amend` reject a task with more than 5 acceptance criteria or a criterion longer than 300 characters. Plans of existing runs stay loadable.
 

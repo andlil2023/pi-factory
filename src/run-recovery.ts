@@ -105,8 +105,8 @@ export async function validateRunGitState(state: FactoryRunState, repository: st
 export const MAX_GUIDANCE_LENGTH = 20_000;
 
 /** Caller holds an exclusive run lock and has validated the persisted plan. */
-export async function prepareRunResume(store: StateStore, state: FactoryRunState, repository: string, fingerprint: string, maxAttempts: number, retryTask?: string, guidance?: string): Promise<FactoryRunState> {
-  if (!state.execution || !Number.isSafeInteger(state.execution.maxAttempts) || state.execution.maxAttempts < 1 || state.execution.configurationFingerprint !== fingerprint || state.execution.maxAttempts !== maxAttempts) throw new Error('Resume requires the original execution configuration and retry budget');
+export async function prepareRunResume(store: StateStore, state: FactoryRunState, repository: string, fingerprint: string, maxAttempts: number, retryTask?: string, guidance?: string, maxInfraRetries = 0): Promise<FactoryRunState> {
+  if (!state.execution || !Number.isSafeInteger(state.execution.maxAttempts) || state.execution.maxAttempts < 1 || !Number.isSafeInteger(state.execution.maxInfraRetries ?? 0) || (state.execution.maxInfraRetries ?? 0) < 0 || !Number.isSafeInteger(maxInfraRetries) || maxInfraRetries < 0 || (state.execution.maxInfraRetries ?? 0) !== maxInfraRetries || state.execution.configurationFingerprint !== fingerprint || state.execution.maxAttempts !== maxAttempts) throw new Error('Resume requires the original execution configuration and retry budget');
   if (state.status === 'completed') throw new Error('Run is already completed; integration is a separate operation');
   const active = Object.values(state.tasks).filter(task => task.status !== 'pending' && task.status !== 'completed');
   if (active.length > 1) throw new Error('Multiple unfinished active tasks; inspect state before resuming');

@@ -1,8 +1,9 @@
 import type { FactoryEventBus } from './event-bus.ts';
+import { AgentExecutionError } from './agent-error.ts';
 import { appendReviewResult, reconcileReviewResults } from './review-results.ts';
 import type { ReviewSelection } from './review-routing.ts';
 import type { UiEvidenceRecord } from './ui-evidence.ts';
-import { consumedAttempts, type FactoryRunState, type StateStore, type AttemptRecord, type ReviewVerdict } from './state-store.ts';
+import { consumedAttempts, consumedInfraRetries, type FactoryRunState, type StateStore, type AttemptRecord, type ReviewVerdict } from './state-store.ts';
 
 export interface PlannedTask {
   id: string;
@@ -74,6 +75,8 @@ export class Orchestrator {
 
   async execute(state: FactoryRunState, tasks: PlannedTask[]): Promise<FactoryRunState> {
     const maxAttempts = this.options.maxAttempts ?? 3;
+    const maxInfraRetries = state.execution?.maxInfraRetries ?? 0;
+    if (!Number.isSafeInteger(maxInfraRetries) || maxInfraRetries < 0) throw new Error('Invalid maxInfraRetries');
     const requiredReviewers = this.options.requiredReviewers ?? ['code'];
     if (!Number.isSafeInteger(maxAttempts) || maxAttempts < 1) throw new Error('Invalid maxAttempts');
     if (!requiredReviewers.includes('code') || new Set(requiredReviewers).size !== requiredReviewers.length) throw new Error('Invalid required reviewers');
@@ -121,6 +124,7 @@ export class Orchestrator {
         await this.store.save(state);
         const feedback = taskState.attempts.slice(0, -1).flatMap(a => [
           ...(a.outcome === 'blocked' || a.outcome === 'failed' || a.outcome === 'interrupted' || a.outcome === 'error' ? [a.implementationReport] : []),
+          ...(a.infraRetry ? [`Factory retry note: ${a.infraRetry.role} failed: ${a.infraRetry.error}. Inspect the worktree and continue any remaining edits; keep work tightly scoped to the task.`] : []),
           a.verification, ...(a.reviews ?? []).map(r => r.report),
           ...(a.uiEvidence && !a.uiEvidence.passed ? [a.uiEvidence] : [])
         ].filter(x => x !== undefined));
@@ -207,9 +211,11 @@ export class Orchestrator {
             }
           }
         } catch (error) {
-          this.options.events?.emit({type:'AGENT_FAILED',taskId:ready.id,attempt:attempt.number,message:error instanceof Error?error.message:String(error)});
+          this.options.events?.emit({type:'AGENT_FAILED',taskId:ready.id,attempt:attempt.number,...(error instanceof AgentExecutionError ? {agent:error.role} : {}),message:error instanceof Error?error.message:String(error)});
           attempt.outcome = 'error';
-          taskState.status = 'blocked';
+          const retry = error instanceof AgentExecutionError && error.retryable && consumedInfraRetries(taskState) < maxInfraRetries;
+          if (retry) attempt.infraRetry = { role: error.role, error: error.message };
+          taskState.status = retry ? 'repair_pending' : 'blocked';
           taskState.lastError = `Agent/verification error: ${error instanceof Error ? error.message : String(error)}; inspect worktree before retrying`;
         } finally {
           attempt.finishedAt = new Date().toISOString();

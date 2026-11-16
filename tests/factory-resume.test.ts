@@ -7,7 +7,7 @@ import { dirname, join, resolve } from 'node:path';
 import type { FactoryRunState } from '../src/state-store.ts';
 
 const cli = resolve('src/factory-cli.ts');
-test('CLI resumes a blocked run in its original worktree with history, budgets, and checkpoints intact', async t => {
+for (const budget of [undefined, 2] as const) test(`CLI pins ${budget === undefined ? 'default' : 'explicit'} infrastructure budget and resumes with history intact`, async t => {
   const dir = await mkdtemp(join(tmpdir(), 'factory-resume-cli-'));
   const repository = join(dir, 'project');
   // The CLI chooses its default sibling .factory-worktrees directory inside this fixture.
@@ -27,8 +27,16 @@ test('CLI resumes a blocked run in its original worktree with history, budgets, 
   await writeFile(plan, JSON.stringify({ objective: 'Fixture', assumptions: [], decisions: [], tasks, verification: ['trusted-check'] }));
   const config = join(dir, 'config.json');
   const model = { provider: 'fixture', model: 'fixture' };
-  await writeFile(config, JSON.stringify({ agents: { planner: model, implementer: model, reviewer: model }, execution: { maxAttempts: 3 }, verification: [{ executable: process.execPath, args: ['-e', 'process.exit(0)'] }], pi: { executable: process.execPath, executableArgs: [resolve('tests/fixtures/fake-factory-agent.mjs')] } }));
+  const settings = { agents: { planner: model, implementer: model, reviewer: model }, execution: { maxAttempts: 3, ...(budget === undefined ? {} : { maxInfraRetries: budget }) }, verification: [{ executable: process.execPath, args: ['-e', 'process.exit(0)'] }], pi: { executable: process.execPath, executableArgs: [resolve('tests/fixtures/fake-factory-agent.mjs')] } };
+  await writeFile(config, JSON.stringify(settings));
   const runCli = (...args: string[]) => spawnSync(process.execPath, ['--experimental-strip-types', cli, ...args, '--config', config], { encoding: 'utf8', timeout: 60_000 });
+  for (const invalid of [-1, 0.5, Number.MAX_SAFE_INTEGER + 1, '1', null]) {
+    await writeFile(config, JSON.stringify({ ...settings, execution: { maxAttempts: 3, maxInfraRetries: invalid } }));
+    const rejected = runCli('run', '--repo', repository, '--plan', plan, '--approve');
+    assert.notEqual(rejected.status, 0);
+    assert.match(rejected.stderr, /Invalid execution.maxInfraRetries/);
+  }
+  await writeFile(config, JSON.stringify(settings));
   const first = runCli('run', '--repo', repository, '--plan', plan, '--approve');
   assert.equal(first.status, 1, first.stdout + first.stderr);
   const directory = join(repository, '.factory', 'runs');
@@ -43,6 +51,12 @@ test('CLI resumes a blocked run in its original worktree with history, budgets, 
   assert.equal(blocked.tasks.T002.status, 'blocked');
   assert.equal(blocked.git!.expectedHead, blocked.tasks.T001.checkpointCommit);
   assert.equal(blocked.execution?.maxAttempts, 3);
+  assert.equal(blocked.execution?.maxInfraRetries, budget ?? 1);
+  await writeFile(config, JSON.stringify({ ...settings, execution: { maxAttempts: 3, maxInfraRetries: 0 } }));
+  const mismatch = runCli('resume', '--repo', repository, '--run', blocked.runId, '--retry-task', 'T002', '--approve');
+  assert.notEqual(mismatch.status, 0);
+  assert.match(mismatch.stderr, /original execution configuration/);
+  await writeFile(config, JSON.stringify(settings));
   const acceptedWork = await readFile(join(worktree, 'T001.txt'), 'utf8');
   const failedWork = await readFile(join(worktree, 'T002.txt'), 'utf8');
   const unapproved = runCli('resume', '--repo', repository, '--run', blocked.runId);

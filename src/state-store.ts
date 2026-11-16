@@ -20,6 +20,8 @@ export interface AttemptRecord {
   reviewSelection?: ReviewSelection;
   reviews?: Array<{ reviewer: string; verdict: ReviewVerdict; report: unknown }>;
   checkpointCommit?: string;
+  /** An automatic retry was allocated after this failed invocation. */
+  infraRetry?: { role: 'implementer' | 'reviewer'; error: string };
 }
 
 export interface TaskState {
@@ -40,6 +42,7 @@ export interface GitExecutionState {
 }
 export interface ExecutionPolicy {
   maxAttempts: number;
+  maxInfraRetries?: number;
   configurationFingerprint: string;
 }
 
@@ -90,6 +93,10 @@ export interface FactoryRunState {
  * Blocked reports, interruptions and errors always stop for the operator, so each
  * further attempt already needs an approved resume.
  */
+export function consumedInfraRetries(task: TaskState): number {
+  return task.attempts.filter(attempt => attempt.infraRetry !== undefined).length;
+}
+
 export function consumedAttempts(task: TaskState): number {
   return task.attempts.filter(attempt => attempt.finishedAt !== undefined
     && attempt.outcome !== 'blocked' && attempt.outcome !== 'interrupted' && attempt.outcome !== 'error').length;

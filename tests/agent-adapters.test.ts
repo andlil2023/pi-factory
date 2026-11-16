@@ -7,6 +7,7 @@ import type { UiEvidenceConfig } from '../src/ui-evidence.ts';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createAgentAdapters, requiredReviewerIds, type SpecialistReviewers } from '../src/agent-adapters.ts';
+import { AgentExecutionError } from '../src/agent-error.ts';
 
 const model = { provider: 'test-provider', model: 'test-model' };
 const context = { task: { id: 'T001', title: 'Test', objective: 'Test', scope: 'Test', acceptanceCriteria: ['Test'], dependencies: [], verification: ['test'] }, attempt: 1, previousFeedback: [] };
@@ -20,6 +21,24 @@ async function fixture(t: import('node:test').TestContext, mode = 'normal', revi
     implementer: model, reviewer: model, reviewers, reviewRouting, uiEvidence, verification: [], baselineCommit: 'HEAD' });
   return { ...adapters, repository };
 }
+
+test('agent process failures retain retryability and role without process output', async t => {
+  const repository = await mkdtemp(join(tmpdir(), 'factory-agent-failure-'));
+  t.after(() => rm(repository, { recursive: true, force: true }));
+  execFileSync('git', ['init'], { cwd: repository });
+  execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--allow-empty', '-m', 'initial'], { cwd: repository });
+  const adapters = createAgentAdapters({ repository, factoryRoot: resolve('.'), piExecutable: process.execPath,
+    piExecutableArgs: [resolve('tests/fixtures/fake-agent-failure.mjs')], implementer: model, reviewer: model, verification: [], baselineCommit: 'HEAD' });
+  for (const role of ['implementer', 'reviewer'] as const) {
+    const operation = role === 'implementer' ? adapters.implement(context) : adapters.review(context, { outcome: 'implemented', report: {} }, { passed: true, details: [] });
+    await assert.rejects(operation, (e: unknown) => {
+      assert.ok(e instanceof AgentExecutionError);
+      assert.equal(e.role, role); assert.equal(e.retryable, true);
+      assert.doesNotMatch(e.message, /SECRET_STDOUT|SECRET_STDERR/);
+      return true;
+    });
+  }
+});
 
 test('reviewer configuration defaults to code and rejects invalid specialists', () => {
   assert.deepEqual(requiredReviewerIds(), ['code']);
