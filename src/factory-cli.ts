@@ -22,7 +22,7 @@ interface Config {
   reviewers?: SpecialistReviewers;
   reviewRouting?: ReviewRouting;
   uiEvidence?: { command: UiEvidenceCommand };
-  execution?: { maxAttempts?: number };
+  execution?: { maxAttempts?: number; maxInfraRetries?: number };
   verification?: Array<{ executable: string; args?: string[]; timeoutMs?: number }>;
   /** Trusted commands that prepare every fresh run or integration worktree, for example a dependency install. */
   setup?: Array<{ executable: string; args?: string[]; timeoutMs?: number }>;
@@ -77,6 +77,8 @@ async function configFrom(flags:Record<string,string|boolean>):Promise<Config> {
   requiredReviewerIds(config.reviewers);
   const maxAttempts = config.execution?.maxAttempts ?? 3;
   if (!Number.isSafeInteger(maxAttempts) || maxAttempts < 1) throw new Error('Invalid execution.maxAttempts');
+  const maxInfraRetries = config.execution?.maxInfraRetries === undefined ? 1 : config.execution.maxInfraRetries;
+  if (!Number.isSafeInteger(maxInfraRetries) || maxInfraRetries < 0) throw new Error('Invalid execution.maxInfraRetries');
   if (config.uiEvidence !== undefined) {
     if (!config.uiEvidence || !config.reviewers?.ui) throw new Error('uiEvidence requires an enabled UI reviewer');
     validateUiEvidenceCommand(config.uiEvidence.command);
@@ -153,7 +155,7 @@ async function runCommand(flags:Record<string,string|boolean>):Promise<void> {
   const release = await acquireRunLock(store.directory, runId);
   try {
     const state=await store.create(repository,validation.value,validation.value.tasks.map(t=>t.id),runId, {
-      git, execution: { maxAttempts:config.execution?.maxAttempts??3, configurationFingerprint:configurationFingerprint(config) }
+      git, execution: { maxAttempts:config.execution?.maxAttempts??3, maxInfraRetries:config.execution?.maxInfraRetries??1, configurationFingerprint:configurationFingerprint(config) }
     });
     await executeRun(store, state, config);
   } finally { await release(); }
@@ -174,7 +176,7 @@ async function resumeCommand(flags:Record<string,string|boolean>):Promise<void> 
     const ids=plan.value.tasks.map(task=>task.id);
     if (ids.length!==Object.keys(loaded.tasks).length || ids.some(id=>!loaded.tasks[id])) throw new Error('Task plan/state mismatch');
     const retryTask=flags['retry-task']===undefined ? undefined : required(flags,'retry-task');
-    const state=await prepareRunResume(store,loaded,repository,configurationFingerprint(config),config.execution?.maxAttempts??3,retryTask,await guidanceFrom(flags));
+    const state=await prepareRunResume(store,loaded,repository,configurationFingerprint(config),config.execution?.maxAttempts??3,retryTask,await guidanceFrom(flags),config.execution?.maxInfraRetries ?? (loaded.execution?.maxInfraRetries === undefined ? 0 : 1));
     await executeRun(store,state,config);
   } finally { await release(); }
 }

@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createWorktree } from '../src/git-worktree.ts';
 import { createGitCheckpoint } from '../src/git-checkpoint.ts';
-import { StateStore } from '../src/state-store.ts';
+import { StateStore, consumedInfraRetries } from '../src/state-store.ts';
+import { AgentExecutionError } from '../src/agent-error.ts';
 import { Orchestrator } from '../src/orchestrator.ts';
 import { captureRunGitState, configurationFingerprint, prepareRunResume, validateRunGitState } from '../src/run-recovery.ts';
 
@@ -36,6 +37,44 @@ async function fixture(t: import('node:test').TestContext) {
 test('configuration identity ignores object-key order, not changes to trusted settings', () => {
   assert.equal(configurationFingerprint({ a: { x: 1, y: 2 }, b: [1, 2] }), configurationFingerprint({ b: [1, 2], a: { y: 2, x: 1 } }));
   assert.notEqual(configurationFingerprint({ budget: 3 }), configurationFingerprint({ budget: 4 }));
+});
+
+test('legacy configuration resumes unchanged with zero infrastructure retries', async t => {
+  const { repository, store, state } = await fixture(t);
+  const loaded = await store.load(state.runId);
+  const resumed = await prepareRunResume(store, loaded, repository, fingerprint, 3);
+  assert.equal(resumed.execution?.configurationFingerprint, fingerprint);
+  assert.equal(resumed.execution?.maxInfraRetries, undefined);
+  const tasks = ['T001', 'T002'].map(id => ({ id, title: id, objective: 'A', scope: 'A', acceptanceCriteria: ['A'], dependencies: [], verification: ['test'] }));
+  const result = await new Orchestrator(store, {
+    implement: async () => { throw new AgentExecutionError('implementer', true, 'timeout'); },
+    verify: async () => ({ passed: true, details: {} }),
+    review: async () => []
+  }).execute(resumed, tasks);
+  assert.equal(result.status, 'blocked');
+  assert.equal(result.tasks.T001.attempts.length, 1);
+  assert.equal(consumedInfraRetries(result.tasks.T001), 0);
+});
+
+test('operator resume preserves exhausted infrastructure retry usage', async t => {
+  const { repository, store, state } = await fixture(t);
+  state.execution!.maxInfraRetries = 1;
+  const tasks = ['T001', 'T002'].map(id => ({ id, title: id, objective: 'A', scope: 'A', acceptanceCriteria: ['A'], dependencies: [], verification: ['test'] }));
+  const adapters = {
+    implement: async () => { throw new AgentExecutionError('implementer', true, 'timeout'); },
+    verify: async () => ({ passed: true, details: {} }),
+    review: async () => []
+  };
+  await new Orchestrator(store, adapters).execute(state, tasks);
+  const loaded = await store.load(state.runId);
+  assert.equal(loaded.tasks.T001.attempts.length, 2);
+  assert.equal(consumedInfraRetries(loaded.tasks.T001), 1);
+  await assert.rejects(prepareRunResume(store, loaded, repository, fingerprint, 3, 'T001', undefined, 0), /original execution configuration/);
+  const resumed = await prepareRunResume(store, loaded, repository, fingerprint, 3, 'T001', undefined, 1);
+  const result = await new Orchestrator(store, adapters).execute(resumed, tasks);
+  assert.equal(result.status, 'blocked');
+  assert.equal(result.tasks.T001.attempts.length, 3);
+  assert.equal(consumedInfraRetries((await store.load(state.runId)).tasks.T001), 1);
 });
 
 test('persists Git metadata and resumes pending work without replaying attempts', async t => {

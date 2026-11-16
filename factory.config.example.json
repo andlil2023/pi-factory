@@ -27,7 +27,8 @@
     }
   },
   "execution": {
-    "maxAttempts": 3
+    "maxAttempts": 3,
+    "maxInfraRetries": 1
   },
   "setup": [
     {
