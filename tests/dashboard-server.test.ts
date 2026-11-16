@@ -11,7 +11,7 @@ import { createDashboardServer } from '../src/dashboard-server.ts';
 test('read-only HTTP projections and reconnectable bounded streams', async () => {
   const root = await mkdtemp(join(tmpdir(), 'dashboard-http-'));
   const dir = join(root, '.factory', 'runs'); await mkdir(dir, { recursive: true });
-  await writeFile(join(dir, 'r.json'), JSON.stringify({ version: 1, runId: 'r', repository: root, createdAt: 'a', updatedAt: 'b', status: 'running', plan: { secret: 'hidden' }, tasks: {} }));
+  await writeFile(join(dir, 'r.json'), JSON.stringify({ version: 1, runId: 'r', repository: root, createdAt: 'a', updatedAt: 'b', status: 'running', plan: { objective: 'Build a thing\nMore detail', tasks: [{ id: 'T001', title: 'First task', secret: 'hidden' }], secret: 'hidden' }, tasks: { T001: { id: 'T001', status: 'pending', attempts: [] } } }));
   const event = (timestamp: string) => JSON.stringify({ runId: 'r', timestamp, type: 'RUN_STARTED', details: 'hidden' }) + '\n';
   await writeFile(join(dir, 'r.events.jsonl'), event('1'));
   const server = createDashboardServer(root);
@@ -27,7 +27,11 @@ test('read-only HTTP projections and reconnectable bounded streams', async () =>
     assert.match(runs.headers.get('content-security-policy')!, /default-src 'none'/);
     assert.equal(runs.headers.get('access-control-allow-origin'), null);
     const body = await runs.text(); assert.match(body, /running/); assert.doesNotMatch(body, /hidden/);
-    assert.equal((await fetch(`${base}/api/runs/r`)).status, 200);
+    assert.match(body, /Build a thing/); assert.match(body, /First task/);
+    const detail = await fetch(`${base}/api/runs/r`); assert.equal(detail.status, 200);
+    const detailText = await detail.text();
+    assert.match(detailText, /More detail/); assert.match(detailText, /First task/);
+    assert.doesNotMatch(detailText, /hidden|"plan"/);
     assert.doesNotMatch(await (await fetch(`${base}/api/runs/r/events`)).text(), /hidden/);
     assert.equal((await fetch(base)).status, 200);
     const badHost = await new Promise<import('node:http').IncomingMessage>((resolve, reject) => {

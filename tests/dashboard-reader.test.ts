@@ -26,6 +26,9 @@ test('dashboard reader projects state, isolates unavailable runs, and limits eve
     const runs = await reader.listRuns();
     assert.deepEqual(runs.map(r => [r.runId, r.available]), [['broken', false], ['good', true], ['large', false], ['partial', false]]);
     const good = await reader.readRun('good'); assert.ok(good.available);
+    assert.equal(good.run.label, 'good');
+    assert.equal(good.run.objectiveSummary, undefined);
+    assert.equal(good.run.tasks[0].title, 'T001');
     assert.equal(good.run.tasks[0].budgetUsed, 1);
     assert.equal(good.run.tasks[0].attempts[0].verification?.passed, false);
     assert.equal(good.run.tasks[0].attempts[0].reviews[0].findings[0].description, 'fix');
@@ -38,6 +41,21 @@ test('dashboard reader projects state, isolates unavailable runs, and limits eve
     const projectedMalformed = await reader.readRun('malformed');
     assert.ok(projectedMalformed.available);
     assert.doesNotMatch(JSON.stringify(projectedMalformed), /SECRET_/);
+    const metadata = { ...state, runId: 'metadata', plan: { objective: `  \n ${'A'.repeat(101)} \n${'B'.repeat(2100)} `, tasks: [{ id: 'other', title: 'Wrong' }, { id: 'T001', title: ` ${'T'.repeat(201)} `, secret: 'SECRET_TITLE' }], secret: 'SECRET_PLAN' } };
+    await writeFile(join(dir, 'metadata.json'), JSON.stringify(metadata));
+    const projected = await reader.readRun('metadata'); assert.ok(projected.available);
+    assert.equal(projected.run.label, 'A'.repeat(99) + '…');
+    assert.equal(projected.run.objectiveSummary, metadata.plan.objective.trim().slice(0, 1999) + '…');
+    assert.equal(projected.run.tasks[0].title, 'T'.repeat(199) + '…');
+    assert.equal(projected.run.supersededTasks[0].task.title, 'T001');
+    assert.doesNotMatch(JSON.stringify(projected), /SECRET_/);
+    for (const plan of [undefined, null, {}, [], { objective: 42, tasks: 'bad' }, { objective: '  \n ', tasks: [null, { id: 'T001', title: '  ' }, { id: 'other', title: 'wrong' }] }]) {
+      await writeFile(join(dir, 'fallback.json'), JSON.stringify({ ...state, runId: 'fallback', plan }));
+      const fallback = await reader.readRun('fallback'); assert.ok(fallback.available);
+      assert.equal(fallback.run.label, 'fallback');
+      assert.equal(fallback.run.objectiveSummary, undefined);
+      assert.equal(fallback.run.tasks[0].title, 'T001');
+    }
     const lines = Array.from({ length: 2100 }, (_, i) => JSON.stringify({ timestamp: String(i), runId: 'good', type: 'RUN_STARTED', details: { prompt: 'SECRET_PROMPT' } }));
     await writeFile(join(dir, 'good.events.jsonl'), lines.join('\n') + '\n{');
     const events = await reader.readEvents('good');

@@ -29,6 +29,46 @@ function text(element: Element): string {
   return [element.textContent, ...element.children.map(text)].join(' ');
 }
 
+test('descriptive names, IDs and intended work render as text with narrow-layout styles', async () => {
+  const elements = Object.fromEntries(['runs', 'list-status', 'refresh', 'details', 'detail-heading', 'detail-status', 'timeline', 'connection'].map(id => [id, new Element(id)]));
+  const longTitle = '<img src=x>' + 'x'.repeat(200);
+  const entry = { runId: '<run-id>', available: true, run: {
+    label: '<b>Run name</b>', objectiveSummary: '<script>work</script>\nnext line',
+    status: 'running', createdAt: '2025-01-01', updatedAt: '2025-01-02',
+    tasks: [{ id: '<task-id>', title: longTitle, status: 'running' }, { id: 'fallback', status: 'pending' }]
+  } };
+  const context = {
+    document: { getElementById: (id: string) => elements[id], createElement: (tag: string) => new Element(tag), activeElement: null },
+    fetch: async () => ({ ok: true, json: async () => [entry, { runId: 'unavailable', available: false }] }),
+    setInterval() {}, showDetails: (_entry: unknown) => {}
+  };
+  runInNewContext(await readFile(new URL('../src/dashboard/dashboard.js', import.meta.url), 'utf8'), context);
+  await new Promise(resolve => setImmediate(resolve));
+  const button = elements.runs.children[0].children[0];
+  assert.equal(button.children[0].textContent, entry.run.label);
+  assert.equal(button.children[1].textContent, entry.runId);
+  assert.equal(elements.runs.children[1].children[0].children[0].textContent, 'unavailable');
+  context.showDetails(entry);
+  assert.equal(elements['detail-heading'].textContent, entry.run.label);
+  assert.match(text(elements.details), /<run-id>/);
+  assert.match(text(elements.details), /Intended work/);
+  assert.match(text(elements.details), /<script>work<\/script>/);
+  const cards = elements.details.querySelectorAll('article');
+  assert.equal(cards[0].children[0].children[0].children[0].textContent, longTitle);
+  assert.equal(cards[0].children[0].children[0].children[1].textContent, '<task-id>');
+  assert.equal(cards[1].children[0].children[0].children[0].textContent, 'fallback');
+  assert.equal(elements.details.querySelectorAll('img').length, 0);
+  assert.equal(elements.details.querySelectorAll('script').length, 0);
+  context.showDetails({ ...entry, run: { ...entry.run, label: '', objectiveSummary: '' } });
+  assert.equal(elements['detail-heading'].textContent, entry.runId);
+  assert.doesNotMatch(text(elements.details), /Intended work/);
+  const css = await readFile(new URL('../src/dashboard/dashboard.css', import.meta.url), 'utf8');
+  assert.match(css, /\.task-name\s*\{[^}]*min-width:\s*0/);
+  assert.match(css, /\.task-heading h3\s*\{[^}]*overflow-wrap:\s*anywhere/);
+  assert.match(css, /\.display-id\s*\{[^}]*overflow-wrap:\s*anywhere/);
+  assert.match(css, /@media\s*\(max-width:\s*640px\)/);
+});
+
 test('run details prioritize actionable cards, preserve expanded history and safely render events', async () => {
   const elements = Object.fromEntries(['runs', 'list-status', 'refresh', 'details', 'detail-heading', 'detail-status', 'timeline', 'connection'].map(id => [id, new Element(id)]));
   let snapshot: (event: { data: string }) => void = () => {};
@@ -70,7 +110,7 @@ test('run details prioritize actionable cards, preserve expanded history and saf
   assert.match(text(details), /Validate input/);
   assert.match(text(details), /Final verification: not checked/);
   assert.match(text(details), /Merge failed/);
-  assert.equal(details.querySelectorAll('article')[0].children[0].children[0].textContent, '<img src=x>');
+  assert.equal(details.querySelectorAll('article')[0].children[0].children[0].children[0].textContent, '<img src=x>');
   assert.equal(details.querySelectorAll('img').length, 0, 'untrusted values remain text');
   const history = details.querySelectorAll('details')[0];
   assert.equal(history.open, false);

@@ -21,7 +21,7 @@ function validTask(value: unknown): value is TaskState {
   return value.attempts.every((a: unknown) => object(a) && Number.isSafeInteger(a.number) && typeof a.startedAt === 'string' && (a.finishedAt === undefined || typeof a.finishedAt === 'string') && (a.outcome === undefined || (typeof a.outcome === 'string' && outcomes.includes(a.outcome))) && (a.reviews === undefined || (Array.isArray(a.reviews) && a.reviews.every((r: unknown) => object(r) && typeof r.reviewer === 'string' && typeof r.verdict === 'string' && ['approved', 'changes_requested', 'blocked'].includes(r.verdict)))));
 }
 function validState(value: unknown, id: string): value is FactoryRunState {
-  if (!object(value) || value.version !== 1 || value.runId !== id || typeof value.repository !== 'string' || typeof value.createdAt !== 'string' || typeof value.updatedAt !== 'string' || typeof value.status !== 'string' || !runStatuses.includes(value.status) || !('plan' in value) || !object(value.tasks)) return false;
+  if (!object(value) || value.version !== 1 || value.runId !== id || typeof value.repository !== 'string' || typeof value.createdAt !== 'string' || typeof value.updatedAt !== 'string' || typeof value.status !== 'string' || !runStatuses.includes(value.status) || !object(value.tasks)) return false;
   if (!Object.entries(value.tasks).every(([key, task]) => validTask(task) && task.id === key)) return false;
   return value.supersededTasks === undefined || (Array.isArray(value.supersededTasks) && value.supersededTasks.every((entry: unknown) => object(entry) && typeof entry.supersededAt === 'string' && validTask(entry.task)));
 }
@@ -29,9 +29,15 @@ function fields(value: unknown, names: string[]): Record<string, unknown> {
   if (!object(value)) return {};
   return Object.fromEntries(names.filter(name => typeof value[name] === 'string' || (name === 'line' && Number.isSafeInteger(value[name]))).map(name => [name, value[name]]));
 }
-function projectTask(task: TaskState) {
+function displayString(value: unknown, limit: number): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  return trimmed.length > limit ? trimmed.slice(0, limit - 1) + '…' : trimmed;
+}
+function projectTask(task: TaskState, title?: string) {
   return {
-    id: task.id, status: task.status, budgetUsed: consumedAttempts(task), lastError: task.lastError,
+    id: task.id, title: title ?? task.id, status: task.status, budgetUsed: consumedAttempts(task), lastError: task.lastError,
     attempts: task.attempts.map(a => ({
       number: a.number, startedAt: a.startedAt, finishedAt: a.finishedAt, outcome: a.outcome,
       verification: object(a.verification) && typeof a.verification.passed === 'boolean' ? { passed: a.verification.passed } : undefined,
@@ -47,10 +53,21 @@ function projectTask(task: TaskState) {
 }
 /** Explicit allowlist: never return plan, configuration, reports, command output or UI artifacts. */
 export function projectRun(state: FactoryRunState) {
+  const plan: unknown = state.plan;
+  const objective = object(plan) && typeof plan.objective === 'string' ? plan.objective : undefined;
+  const label = objective?.split(/\r\n|\r|\n/).map(line => line.trim()).find(Boolean);
+  const titles = new Map<string, string>();
+  if (object(plan) && Array.isArray(plan.tasks)) {
+    for (const task of plan.tasks) {
+      if (!object(task) || typeof task.id !== 'string') continue;
+      const title = displayString(task.title, 200);
+      if (title && !titles.has(task.id)) titles.set(task.id, title);
+    }
+  }
   return {
-    runId: state.runId, createdAt: state.createdAt, updatedAt: state.updatedAt, status: state.status,
+    runId: state.runId, label: displayString(label, 100) ?? state.runId, objectiveSummary: displayString(objective, 2000), createdAt: state.createdAt, updatedAt: state.updatedAt, status: state.status,
     maxAttempts: Number.isSafeInteger(state.execution?.maxAttempts) ? state.execution?.maxAttempts : undefined,
-    tasks: Object.values(state.tasks).map(projectTask),
+    tasks: Object.values(state.tasks).map(task => projectTask(task, titles.get(task.id))),
     supersededTasks: (state.supersededTasks ?? []).map(entry => ({ supersededAt: entry.supersededAt, task: projectTask(entry.task) })),
     finalVerification: state.finalVerification && typeof state.finalVerification.passed === 'boolean' ? { passed: state.finalVerification.passed, checkedAt: typeof state.finalVerification.checkedAt === 'string' ? state.finalVerification.checkedAt : undefined } : undefined,
     integrations: (Array.isArray(state.integrations) ? state.integrations : []).filter(object).map(i => ({
