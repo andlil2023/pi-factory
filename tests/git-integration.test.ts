@@ -233,8 +233,8 @@ test('production reviewer partial failure retains blocking findings and sends th
   const next = await prepareIntegration(store, saved, options, true);
   assert.equal(next.status, 'ready', next.error);
   for (const review of next.reviews!) {
-    const { args } = JSON.parse((review.report as { summary: string }).summary) as { args: string[] };
-    assert.match(args.at(-1)!, /PRIOR_SECURITY_FINDING_7821/);
+    const { prompt } = JSON.parse((review.report as { summary: string }).summary) as { prompt: string };
+    assert.match(prompt, /PRIOR_SECURITY_FINDING_7821/);
   }
   assert.deepEqual(saved.integrations![0].reviews, partial);
 });

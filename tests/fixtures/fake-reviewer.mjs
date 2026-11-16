@@ -1,14 +1,13 @@
 // Deterministic reviewer process: no model or network access.
 import { readFile } from 'node:fs/promises';
-const args = process.argv.slice(2);
-const prompt = args.at(-1);
+import { args, prompt, instructions } from './pi-input.mjs';
 const id = /Use reviewer="([a-z]+)"/.exec(prompt)?.[1];
 const mode = args[0];
 const report = {
   taskId: mode === 'wrong-task' && id === 'security' ? 'T999' : /"id":"(T\d+)"/.exec(prompt)?.[1] ?? 'T001',
   reviewer: mode === 'wrong-reviewer' && id === 'security' ? 'code' : id,
   verdict: mode === 'blocked' && id === 'ui' ? 'blocked' : 'approved',
-  summary: JSON.stringify({ args, pid: process.pid }),
+  summary: JSON.stringify({ args, prompt, instructions, pid: process.pid }),
   findings: [],
   limitations: mode === 'blocked' && id === 'ui' ? ['Missing rendered evidence'] : []
 };

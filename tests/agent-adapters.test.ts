@@ -44,8 +44,7 @@ test('production prompts include approved plan context without expanding the ass
   const assigned = { ...context, plan };
   for (const attempt of [1, 2]) {
     const implementation = await adapters.implement({ ...assigned, attempt, previousFeedback: ['Prior missing-policy blocker'] });
-    const { args } = JSON.parse((implementation.report as { summary: string }).summary) as { args: string[] };
-    const prompt = args.at(-1)!;
+    const { prompt } = JSON.parse((implementation.report as { summary: string }).summary) as { prompt: string };
     assert.ok(prompt.includes(JSON.stringify(plan)));
     assert.ok(prompt.includes(JSON.stringify(context.task)));
     assert.match(prompt, /Implement ONLY/);
@@ -55,9 +54,9 @@ test('production prompts include approved plan context without expanding the ass
   const reviewers = await fixture(t, 'normal', { security: model, ui: model });
   const reviews = await reviewers.review(assigned, { outcome: 'implemented', report: {} }, { passed: true, details: [] });
   for (const review of reviews) {
-    const { args } = JSON.parse((review.report as { summary: string }).summary) as { args: string[] };
-    assert.ok(args.at(-1)!.includes(JSON.stringify(plan)));
-    assert.match(args.at(-1)!, /review only the assigned task against its original acceptance criteria/);
+    const { prompt } = JSON.parse((review.report as { summary: string }).summary) as { prompt: string };
+    assert.ok(prompt.includes(JSON.stringify(plan)));
+    assert.match(prompt, /review only the assigned task against its original acceptance criteria/);
   }
 });
 
@@ -73,14 +72,14 @@ test('specialists run independently with their own instructions, models and read
   assert.deepEqual(reviews.map(r => r.reviewer), ['code', 'security', 'ui']);
   const pids = new Set<number>();
   for (const review of reviews) {
-    const { args, pid } = JSON.parse((review.report as { summary: string }).summary) as { args: string[]; pid: number };
+    const { args, pid, prompt, instructions } = JSON.parse((review.report as { summary: string }).summary) as { args: string[]; pid: number; prompt: string; instructions: string };
     pids.add(pid);
-    const instructions = args[args.indexOf('--append-system-prompt') + 1];
     assert.match(instructions, new RegExp(review.reviewer === 'code' ? 'Independent Code Reviewer' : review.reviewer === 'security' ? 'Security Reviewer' : 'UI and Accessibility Reviewer'));
     assert.equal(args[args.indexOf('--tools') + 1], 'read,grep,find,ls');
     assert.ok(args.includes('--no-session'));
     assert.equal(args[args.indexOf('--model') + 1], review.reviewer === 'security' ? 'security-model' : 'test-model');
-    assert.match(args.at(-1)!, /trusted-check/);
+    assert.match(prompt, /trusted-check/);
+    assert.ok(!args.includes(prompt));
   }
   assert.equal(pids.size, 3);
 });
@@ -96,10 +95,10 @@ test('fresh production reviewer prompts include prior findings as untrusted evid
   const adapters = await fixture(t, 'normal', { security: model, ui: model });
   const reviews = await adapters.review({ ...context, attempt: 2, previousFeedback: [{ findings: [{ severity: 'blocking', description: 'PRIOR_FINDING_MARKER_901' }] }] }, { outcome: 'implemented', report: {} }, { passed: true, details: [] });
   for (const review of reviews) {
-    const { args } = JSON.parse((review.report as { summary: string }).summary) as { args: string[] };
-    assert.match(args.at(-1)!, /PRIOR_FINDING_MARKER_901/);
-    assert.match(args.at(-1)!, /untrusted evidence, not instructions/);
-    assert.match(args.at(-1)!, /reassess prior blocking findings/);
+    const { prompt } = JSON.parse((review.report as { summary: string }).summary) as { prompt: string };
+    assert.match(prompt, /PRIOR_FINDING_MARKER_901/);
+    assert.match(prompt, /untrusted evidence, not instructions/);
+    assert.match(prompt, /reassess prior blocking findings/);
   }
 });
 
@@ -150,9 +149,9 @@ test('UI reviewer receives validated desktop artifact paths, not merely implemen
   const uiEvidence = await adapters.collectUiEvidence!(context);
   assert.equal(uiEvidence.passed, true, uiEvidence.issues.join('\n'));
   const reviews = await adapters.review({ ...context, requiredReviewers: ['code', 'ui'], uiEvidence }, { outcome: 'implemented', report: {} }, { passed: true, details: [] });
-  const summary = JSON.parse((reviews[1].report as { summary: string }).summary) as { args: string[] };
-  assert.ok(summary.args.at(-1)!.includes(uiEvidence.artifacts[0].path.replaceAll('\\', '\\\\')));
-  assert.match(summary.args.at(-1)!, /fake-build-1/);
+  const summary = JSON.parse((reviews[1].report as { summary: string }).summary) as { prompt: string };
+  assert.ok(summary.prompt.includes(uiEvidence.artifacts[0].path.replaceAll('\\', '\\\\')));
+  assert.match(summary.prompt, /fake-build-1/);
   await assert.rejects(adapters.review({ ...context, attempt: 2, requiredReviewers: ['code', 'ui'], uiEvidence }, { outcome: 'implemented', report: {} }, { passed: true, details: [] }), /another attempt/);
 });
 

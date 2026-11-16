@@ -1,6 +1,6 @@
 // Deterministic end-to-end factory agent fixture. No PI or network calls.
 import { readFile, writeFile } from 'node:fs/promises';
-const prompt = process.argv.at(-1);
+import { prompt } from './pi-input.mjs';
 const taskId = /"id":"(T\d+)"/.exec(prompt)?.[1];
 let report;
 if (prompt.startsWith('Implement ONLY')) {

@@ -50,9 +50,10 @@ export async function runPi(request: PiRunRequest): Promise<PiRunResult> {
     '--print', '--mode', 'json', '--no-session',
     '--provider', request.provider,
     '--model', request.model,
-    '--append-system-prompt', instructions,
+    // PI accepts an instruction-file path and a piped prompt. Keep both bodies
+    // off argv so full review evidence cannot exceed Windows command-line limits.
+    '--append-system-prompt', resolve(request.instructionsFile),
     ...(request.tools ? ['--tools', request.tools.join(',')] : []),
-    request.prompt,
   ];
 
   const started = Date.now();
@@ -70,7 +71,7 @@ export async function runPi(request: PiRunRequest): Promise<PiRunResult> {
       cwd: resolve(request.repository),
       shell: false,
       windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
 
     let stdout = '';
@@ -78,6 +79,7 @@ export async function runPi(request: PiRunRequest): Promise<PiRunResult> {
     let settled = false;
     let timedOut = false;
     let cancelled = false;
+    let inputFailed = false;
     const finishError = (message: string) => {
       if (settled) return;
       settled = true;
@@ -87,6 +89,7 @@ export async function runPi(request: PiRunRequest): Promise<PiRunResult> {
     const cleanup = () => {
       clearTimeout(timer);
       request.signal?.removeEventListener('abort', abort);
+      child.stdin.destroy();
     };
     const abort = () => {
       cancelled = true;
@@ -99,14 +102,29 @@ export async function runPi(request: PiRunRequest): Promise<PiRunResult> {
     request.signal?.addEventListener('abort', abort, { once: true });
     if (request.signal?.aborted) abort();
 
-    child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf8'); });
-    child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8'); });
+    child.stdin.on('error', () => {
+      if (settled) return;
+      // A child can close stdin before a large write completes. Contain EPIPE
+      // and retain nonzero-exit/timeout/cancellation diagnostics on close.
+      inputFailed = true;
+      child.kill();
+    });
+    child.once('spawn', () => {
+      if (!timedOut && !cancelled) child.stdin.end(request.prompt, 'utf8');
+      else child.stdin.destroy();
+    });
+    // Streaming decoders preserve multibyte characters split across pipe chunks.
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => { stdout += chunk; });
+    child.stderr.on('data', (chunk: string) => { stderr += chunk; });
     child.on('error', (error) => finishError(`Unable to launch PI: ${error.message}`));
     child.on('close', (code) => {
       if (settled) return;
       if (timedOut) return finishError(`PI timed out after ${timeoutMs} ms`);
       if (cancelled) return finishError('PI execution cancelled');
       if (code !== 0) return finishError(`PI exited with code ${code ?? 'unknown'}`);
+      if (inputFailed) return finishError('Unable to send prompt to PI');
 
       const events: unknown[] = [];
       try {
