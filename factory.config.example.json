@@ -49,10 +49,13 @@
   "verification": [
     {
       "executable": "node",
-      "args": [
-        "--test"
-      ],
+      "args": ["node_modules/typescript/bin/tsc", "--noEmit"],
       "timeoutMs": 120000
+    },
+    {
+      "executable": "node",
+      "args": ["--experimental-strip-types", "--test", "tests/*.test.ts"],
+      "timeoutMs": 600000
     }
   ]
 }
