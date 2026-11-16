@@ -3,30 +3,39 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Factory dashboard</title>
+  <meta name="color-scheme" content="dark">
+  <title>Factory · Mission control</title>
   <link rel="stylesheet" href="/dashboard.css">
   <script src="/dashboard.js" defer></script>
 </head>
 <body>
 <main>
-  <h1>Factory dashboard</h1>
-  <p>Read-only. Persisted state is authoritative; lifecycle events are observational.</p>
-  <section aria-labelledby="runs-heading">
-    <h2 id="runs-heading">Runs</h2>
-    <button id="refresh" type="button">Refresh now</button>
-    <p id="list-status" role="status">Loading runs…</p>
-    <ul id="runs"></ul>
-  </section>
-  <section aria-labelledby="detail-heading">
-    <h2 id="detail-heading">Run details</h2>
-    <p id="detail-status" role="status">Select a run.</p>
-    <div id="details"></div>
-  </section>
-  <section aria-labelledby="timeline-heading">
-    <h2 id="timeline-heading">Lifecycle timeline</h2>
-    <p id="connection" role="status">Select a run to connect.</p>
-    <ol id="timeline"></ol>
-  </section>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">F</span><div><h1>Factory <span>/ Mission control</span></h1><p>Your development pipeline, at a glance.</p></div></div>
+    <span class="readonly">Read-only workspace</span>
+  </header>
+  <div class="workspace">
+    <aside class="run-panel" aria-labelledby="runs-heading">
+      <div class="section-heading"><h2 id="runs-heading">Runs</h2><button id="refresh" type="button">Refresh now</button></div>
+      <p id="list-status" class="muted" role="status">Loading runs…</p>
+      <ul id="runs"></ul>
+      <p class="sidebar-note">Refreshes every 5 seconds.<br>Persisted state is the source of truth.</p>
+    </aside>
+    <div class="main-column">
+      <section class="detail-panel" aria-labelledby="detail-heading">
+        <div class="eyebrow">RUN OVERVIEW</div>
+        <h2 id="detail-heading">Run details</h2>
+        <p id="detail-status" class="muted" role="status">Select a run to inspect its progress.</p>
+        <div id="details"><div class="empty-state">A clear view of your pipeline.<span>Select a run to see task progress, review findings, and verification results.</span></div></div>
+      </section>
+      <section class="activity-panel" aria-labelledby="timeline-heading">
+        <div class="section-heading"><h2 id="timeline-heading">Activity</h2><span class="eyebrow">LATEST FIRST</span></div>
+        <p id="connection" class="muted" role="status">Select a run to connect.</p>
+        <ol id="timeline"></ol>
+        <p class="footnote">Lifecycle events are observational, not verification evidence.</p>
+      </section>
+    </div>
+  </div>
 </main>
 </body>
 </html>

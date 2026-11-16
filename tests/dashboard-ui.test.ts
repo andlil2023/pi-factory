@@ -21,6 +21,7 @@ test('refresh restores run focus or falls back when the run disappears', async (
     contains(element: Element | null): boolean { return this === element || this.children.some(child => child.contains(element)); }
     focus() { active = this; }
     addEventListener() {}
+    setAttribute() {}
   }
   const elements = Object.fromEntries(['runs', 'list-status', 'refresh', 'details', 'detail-status', 'timeline', 'connection'].map(id => [id, new Element(id)]));
   let runs = [{ runId: 'one', available: false }, { runId: 'two', available: false }];
@@ -60,7 +61,7 @@ test('serves dashboard assets and fixture projections without a browser', async 
     assert.match(jsResponse.headers.get('content-type')!, /javascript/);
     const js = await jsResponse.text();
     assert.match(js, /textContent/); assert.doesNotMatch(js, /innerHTML|insertAdjacentHTML/);
-    assert.match(js, /timeline\.replaceChildren\(\)/); assert.match(js, /last persisted state/);
+    assert.match(js, /timeline\.replaceChildren\(\)/); assert.match(js, /last persisted state/i);
     assert.equal((await fetch(`${base}/dashboard.css`)).status, 200);
     const runs = await (await fetch(`${base}/api/runs`)).json() as Array<{ runId: string; available: boolean }>;
     assert.deepEqual(runs.map(({ runId, available }) => [runId, available]), [['broken', false], ['sample', true]]);
