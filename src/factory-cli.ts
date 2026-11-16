@@ -277,10 +277,9 @@ async function executeRun(store:StateStore,state:FactoryRunState,config:Config):
       for (const command of config.verification ?? []) {
         const outcome = await runVerificationCommand(worktree.path, command);
         details.push(outcome);
-        if (!outcome.passed) return {passed:false,details};
       }
       await assertRunCheckpoint(state);
-      return {passed:true,details};
+      return {passed:details.every(outcome => outcome.passed),details};
     }
   };
   const events=new FactoryEventBus({runId,logFile:join(repository,'.factory','runs',`${runId}.events.jsonl`)});
@@ -326,6 +325,7 @@ async function integrateCommand(flags:Record<string,string|boolean>):Promise<voi
         adapters:(worktree,baseline,attempt)=>createAgentAdapters({repository:worktree,factoryRoot:root,
           piExecutable:launch.executable,piExecutableArgs:launch.executableArgs,
           implementer:config.agents.implementer,reviewer:config.agents.reviewer,reviewers:config.reviewers,reviewRouting:config.reviewRouting,
+          // Integration preparation and publication must never use task-level selection.
           verification:config.verification!,baselineCommit:baseline,
           uiEvidence:config.uiEvidence?{command:config.uiEvidence.command,directory:join(store.directory,runId,'integration-evidence',String(attempt))}:undefined})
       };
