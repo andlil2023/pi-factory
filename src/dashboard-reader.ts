@@ -1,0 +1,121 @@
+import { open, readdir, readFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
+import { consumedAttempts, type FactoryRunState, type TaskState } from './state-store.ts';
+
+const MAX_STATE_BYTES = 5 * 1024 * 1024;
+const EVENT_LIMIT = 2000;
+const runIdPattern = /^[a-zA-Z0-9_-]+$/;
+const runStatuses = ['planned', 'running', 'paused', 'completed', 'blocked'];
+const taskStatuses = ['pending', 'running', 'needs_review', 'repair_pending', 'completed', 'blocked'];
+const outcomes = ['implemented', 'failed', 'blocked', 'interrupted', 'error'];
+const eventTypes = new Set(['RUN_STARTED', 'RUN_COMPLETED', 'RUN_BLOCKED', 'TASK_STARTED', 'TASK_COMPLETED', 'TASK_BLOCKED', 'AGENT_STARTED', 'AGENT_COMPLETED', 'AGENT_FAILED', 'VERIFICATION_PASSED', 'VERIFICATION_FAILED', 'REVIEW_APPROVED', 'REVIEW_CHANGES_REQUESTED', 'REVIEW_BLOCKED', 'REPAIR_STARTED', 'CHECKPOINT_CREATED', 'FINAL_VERIFICATION_PASSED', 'FINAL_VERIFICATION_FAILED']);
+
+function object(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+function assertId(id: string): void {
+  if (!runIdPattern.test(id)) throw new Error('Invalid run ID');
+}
+function validTask(value: unknown): value is TaskState {
+  if (!object(value) || typeof value.id !== 'string' || typeof value.status !== 'string' || !taskStatuses.includes(value.status) || !Array.isArray(value.attempts) || (value.lastError !== undefined && typeof value.lastError !== 'string')) return false;
+  return value.attempts.every((a: unknown) => object(a) && Number.isSafeInteger(a.number) && typeof a.startedAt === 'string' && (a.finishedAt === undefined || typeof a.finishedAt === 'string') && (a.outcome === undefined || (typeof a.outcome === 'string' && outcomes.includes(a.outcome))) && (a.reviews === undefined || (Array.isArray(a.reviews) && a.reviews.every((r: unknown) => object(r) && typeof r.reviewer === 'string' && typeof r.verdict === 'string' && ['approved', 'changes_requested', 'blocked'].includes(r.verdict)))));
+}
+function validState(value: unknown, id: string): value is FactoryRunState {
+  if (!object(value) || value.version !== 1 || value.runId !== id || typeof value.repository !== 'string' || typeof value.createdAt !== 'string' || typeof value.updatedAt !== 'string' || typeof value.status !== 'string' || !runStatuses.includes(value.status) || !('plan' in value) || !object(value.tasks)) return false;
+  if (!Object.entries(value.tasks).every(([key, task]) => validTask(task) && task.id === key)) return false;
+  return value.supersededTasks === undefined || (Array.isArray(value.supersededTasks) && value.supersededTasks.every((entry: unknown) => object(entry) && typeof entry.supersededAt === 'string' && validTask(entry.task)));
+}
+function fields(value: unknown, names: string[]): Record<string, unknown> {
+  if (!object(value)) return {};
+  return Object.fromEntries(names.filter(name => typeof value[name] === 'string' || (name === 'line' && Number.isSafeInteger(value[name]))).map(name => [name, value[name]]));
+}
+function projectTask(task: TaskState) {
+  return {
+    id: task.id, status: task.status, budgetUsed: consumedAttempts(task), lastError: task.lastError,
+    attempts: task.attempts.map(a => ({
+      number: a.number, startedAt: a.startedAt, finishedAt: a.finishedAt, outcome: a.outcome,
+      verification: object(a.verification) && typeof a.verification.passed === 'boolean' ? { passed: a.verification.passed } : undefined,
+      blockers: object(a.implementationReport) && Array.isArray(a.implementationReport.blockers) ? a.implementationReport.blockers.map((b: unknown) => {
+        const projected = fields(b, ['kind', 'description', 'question']);
+        if (object(b) && Array.isArray(b.proposedSplit)) projected.proposedSplit = b.proposedSplit.filter((x: unknown) => typeof x === 'string');
+        return projected;
+      }) : [],
+      reviews: (a.reviews ?? []).map(r => ({ reviewer: r.reviewer, verdict: r.verdict,
+        findings: object(r.report) && Array.isArray(r.report.findings) ? r.report.findings.map((f: unknown) => fields(f, ['severity', 'file', 'line', 'description', 'evidence', 'requiredAction'])) : [] }))
+    }))
+  };
+}
+/** Explicit allowlist: never return plan, configuration, reports, command output or UI artifacts. */
+export function projectRun(state: FactoryRunState) {
+  return {
+    runId: state.runId, createdAt: state.createdAt, updatedAt: state.updatedAt, status: state.status,
+    maxAttempts: Number.isSafeInteger(state.execution?.maxAttempts) ? state.execution?.maxAttempts : undefined,
+    tasks: Object.values(state.tasks).map(projectTask),
+    supersededTasks: (state.supersededTasks ?? []).map(entry => ({ supersededAt: entry.supersededAt, task: projectTask(entry.task) })),
+    finalVerification: state.finalVerification && typeof state.finalVerification.passed === 'boolean' ? { passed: state.finalVerification.passed, checkedAt: typeof state.finalVerification.checkedAt === 'string' ? state.finalVerification.checkedAt : undefined } : undefined,
+    integrations: (Array.isArray(state.integrations) ? state.integrations : []).filter(object).map(i => ({
+      number: Number.isSafeInteger(i.number) ? i.number : undefined, status: typeof i.status === 'string' ? i.status : undefined, error: typeof i.error === 'string' ? i.error : undefined,
+      verification: object(i.verification) && typeof i.verification.passed === 'boolean' ? { passed: i.verification.passed } : undefined,
+      publicationVerification: object(i.publicationVerification) && typeof i.publicationVerification.passed === 'boolean' ? { passed: i.publicationVerification.passed } : undefined,
+      reviews: Array.isArray(i.reviews) ? i.reviews.filter(object).map(r => ({ reviewer: typeof r.reviewer === 'string' ? r.reviewer : undefined, verdict: typeof r.verdict === 'string' ? r.verdict : undefined, findings: object(r.report) && Array.isArray(r.report.findings) ? r.report.findings.map((f: unknown) => fields(f, ['severity', 'file', 'line', 'description', 'evidence', 'requiredAction'])) : [] })) : []
+    }))
+  };
+}
+export type ProjectedRun = ReturnType<typeof projectRun>;
+export type RunRead = { runId: string; available: true; run: ProjectedRun } | { runId: string; available: false };
+
+export class DashboardReader {
+  readonly directory: string;
+  constructor(repository: string) { this.directory = join(resolve(repository), '.factory', 'runs'); }
+  async readRun(runId: string): Promise<RunRead> {
+    assertId(runId);
+    try {
+      const handle = await open(join(this.directory, `${runId}.json`), 'r');
+      try {
+        const stat = await handle.stat();
+        if (!stat.isFile() || stat.size > MAX_STATE_BYTES) return { runId, available: false };
+        // Bounded read also handles a file growing after stat.
+        const buffer = Buffer.alloc(MAX_STATE_BYTES + 1);
+        let size = 0;
+        while (size < buffer.length) {
+          const { bytesRead } = await handle.read(buffer, size, buffer.length - size, size);
+          if (!bytesRead) break;
+          size += bytesRead;
+        }
+        if (size > MAX_STATE_BYTES) return { runId, available: false };
+        const value: unknown = JSON.parse(buffer.subarray(0, size).toString('utf8'));
+        if (!validState(value, runId)) return { runId, available: false };
+        return { runId, available: true, run: projectRun(value) };
+      } finally { await handle.close(); }
+    } catch { return { runId, available: false }; }
+  }
+  async listRuns(): Promise<RunRead[]> {
+    let names: string[];
+    try { names = await readdir(this.directory); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
+    }
+    const ids = names.filter(name => name.endsWith('.json')).map(name => name.slice(0, -5)).filter(id => runIdPattern.test(id)).sort();
+    return Promise.all(ids.map(id => this.readRun(id)));
+  }
+  async readEvents(runId: string) {
+    assertId(runId);
+    let text: string;
+    try { text = await readFile(join(this.directory, `${runId}.events.jsonl`), 'utf8'); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
+    }
+    const events: Array<Record<string, unknown>> = [];
+    for (const line of text.split('\n')) {
+      try {
+        const event: unknown = JSON.parse(line);
+        if (!object(event) || event.runId !== runId || typeof event.timestamp !== 'string' || typeof event.type !== 'string' || !eventTypes.has(event.type)) continue;
+        const projected = fields(event, ['timestamp', 'runId', 'type', 'taskId', 'agent', 'message']);
+        if (Number.isSafeInteger(event.attempt)) projected.attempt = event.attempt;
+        events.push(projected);
+        if (events.length > EVENT_LIMIT) events.shift();
+      } catch { /* incomplete or corrupt log line */ }
+    }
+    return events;
+  }
+}
