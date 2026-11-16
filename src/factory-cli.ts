@@ -247,7 +247,7 @@ async function executeRun(store:StateStore,state:FactoryRunState,config:Config):
   const adapterConfig = {repository:worktree.path,factoryRoot:root,
     piExecutable:launch.executable,piExecutableArgs:launch.executableArgs,
     implementer:config.agents.implementer,reviewer:config.agents.reviewer,reviewers:config.reviewers,reviewRouting:config.reviewRouting,
-    verification:config.verification!,baselineCommit:git.expectedHead,
+    verification:config.verification!,verificationSelection:config.verificationSelection,baselineCommit:git.expectedHead,
     uiEvidence:config.uiEvidence ? { command:config.uiEvidence.command, directory:join(store.directory,runId,'ui-evidence') } : undefined};
   const adapters=createAgentAdapters(adapterConfig);
   console.log(`Run ${runId}; worktree: ${worktree.path}`);
