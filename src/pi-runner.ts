@@ -29,8 +29,10 @@ export interface PiRunResult {
 
 export class PiRunError extends Error {
   readonly details?: string;
-  constructor(message: string, details?: string) {
+  readonly retryable: boolean;
+  constructor(message: string, details?: string, retryable = false) {
     super(message);
+    this.retryable = retryable;
     this.details = details;
     this.name = 'PiRunError';
   }
@@ -80,11 +82,11 @@ export async function runPi(request: PiRunRequest): Promise<PiRunResult> {
     let timedOut = false;
     let cancelled = false;
     let inputFailed = false;
-    const finishError = (message: string) => {
+    const finishError = (message: string, retryable = false) => {
       if (settled) return;
       settled = true;
       cleanup();
-      reject(new PiRunError(message, stderr.slice(-4000)));
+      reject(new PiRunError(message, stderr.slice(-4000), retryable));
     };
     const cleanup = () => {
       clearTimeout(timer);
@@ -121,10 +123,10 @@ export async function runPi(request: PiRunRequest): Promise<PiRunResult> {
     child.on('error', (error) => finishError(`Unable to launch PI: ${error.message}`));
     child.on('close', (code) => {
       if (settled) return;
-      if (timedOut) return finishError(`PI timed out after ${timeoutMs} ms`);
       if (cancelled) return finishError('PI execution cancelled');
-      if (code !== 0) return finishError(`PI exited with code ${code ?? 'unknown'}`);
-      if (inputFailed) return finishError('Unable to send prompt to PI');
+      if (timedOut) return finishError(`PI timed out after ${timeoutMs} ms`, true);
+      if (code !== 0) return finishError(`PI exited with code ${code ?? 'unknown'}`, true);
+      if (inputFailed) return finishError('Unable to send prompt to PI', true);
 
       const events: unknown[] = [];
       try {
@@ -132,9 +134,9 @@ export async function runPi(request: PiRunRequest): Promise<PiRunResult> {
           if (line.trim()) events.push(JSON.parse(line));
         }
       } catch {
-        return finishError('PI returned invalid JSON event output');
+        return finishError('PI returned invalid JSON event output', true);
       }
-      if (events.length === 0) return finishError('PI returned no JSON events');
+      if (events.length === 0) return finishError('PI returned no JSON events', true);
 
       settled = true;
       cleanup();
