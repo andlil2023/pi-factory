@@ -54,6 +54,26 @@ test('missing required review blocks the run', async t => {
   assert.equal(result.status, 'blocked');
   assert.equal(result.tasks.T002.status, 'pending');
 });
+test('persists each validated review before later reviewer failure', async t => {
+  const { store, state } = await fixture(t);
+  const result = await new Orchestrator(store, {
+    implement: async () => ({ outcome: 'implemented', report: {} }),
+    verify: async () => ({ passed: true, details: {} }),
+    review: async (_context, _implementation, _verification, onReview) => {
+      await onReview!({ reviewer: 'code', verdict: 'approved', report: {} });
+      await onReview!({ reviewer: 'security', verdict: 'changes_requested', report: { finding: 'Retain security defect' } });
+      const saved = await store.load('test-run');
+      assert.equal(saved.tasks.T001.attempts[0].reviews?.length, 2);
+      throw new Error('UI reviewer timed out');
+    }
+  }, { requiredReviewers: ['code', 'security', 'ui'] }).execute(state, tasks);
+  assert.equal(result.status, 'blocked');
+  const reviews = (await store.load('test-run')).tasks.T001.attempts[0].reviews!;
+  assert.deepEqual(reviews.map(review => review.reviewer), ['code', 'security']);
+  assert.deepEqual(reviews[1].report, { finding: 'Retain security defect' });
+  assert.equal(result.tasks.T002.status, 'pending');
+});
+
 test('verification failures exhaust retry budget without review', async t => {
   const { store, state } = await fixture(t);
   let reviews = 0;

@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
-import { mkdir, realpath, rm } from 'node:fs/promises';
-import { dirname, join, resolve, sep } from 'node:path';
+import { mkdir, realpath } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
 
 export interface WorktreeInfo {
   repository: string;
@@ -55,11 +55,27 @@ export async function removeWorktree(info: WorktreeInfo, options: { deleteBranch
   const repo = await realpath(resolve(info.repository));
   const actualRoot = await git(repo, ['rev-parse', '--show-toplevel']);
   if (resolve(actualRoot) !== repo) throw new Error('Invalid repository root');
-  const worktrees = await git(repo, ['worktree', 'list', '--porcelain']);
-  const registered = worktrees.split(/\r?\n/).some(line => line.startsWith('worktree ') && resolve(line.slice(9)) === resolve(info.path));
+  // Git may expand Windows 8.3 paths or resolve directory aliases. Compare
+  // filesystem-canonical paths, not just lexically normalized strings.
+  const target = await realpath(resolve(info.path));
+  // NUL-delimited porcelain avoids Git's quoting of unusual path characters.
+  const worktrees = await git(repo, ['worktree', 'list', '--porcelain', '-z']);
+  let registered = false;
+  for (const field of worktrees.split('\0')) {
+    if (!field.startsWith('worktree ')) continue;
+    try {
+      if (await realpath(field.slice(9)) === target) {
+        registered = true;
+        break;
+      }
+    } catch (error) {
+      // A stale registration must not prevent checking other worktrees.
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
   if (!registered) throw new Error('Worktree is not registered; refusing to remove');
   // No --force: preserve uncommitted work for inspection.
-  await git(repo, ['worktree', 'remove', info.path]);
+  await git(repo, ['worktree', 'remove', target]);
   if (options.deleteBranch) await git(repo, ['branch', '-d', info.branch]);
 }
 

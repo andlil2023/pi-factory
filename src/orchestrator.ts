@@ -1,4 +1,7 @@
 import type { FactoryEventBus } from './event-bus.ts';
+import { appendReviewResult, reconcileReviewResults } from './review-results.ts';
+import type { ReviewSelection } from './review-routing.ts';
+import type { UiEvidenceRecord } from './ui-evidence.ts';
 import type { FactoryRunState, StateStore, AttemptRecord, ReviewVerdict } from './state-store.ts';
 
 export interface PlannedTask {
@@ -20,6 +23,7 @@ export interface ReviewResult {
   verdict: ReviewVerdict;
   report: unknown;
 }
+export type ReviewProgress = (review: ReviewResult) => Promise<void>;
 export interface VerificationResult {
   passed: boolean;
   details: unknown;
@@ -28,11 +32,15 @@ export interface TaskContext {
   task: PlannedTask;
   attempt: number;
   previousFeedback: unknown[];
+  requiredReviewers?: string[];
+  uiEvidence?: UiEvidenceRecord;
 }
 export interface OrchestratorAdapters {
   implement(context: TaskContext): Promise<ImplementationResult>;
   verify(context: TaskContext): Promise<VerificationResult>;
-  review(context: TaskContext, implementation: ImplementationResult, verification: VerificationResult): Promise<ReviewResult[]>;
+  selectReviewers?(context: TaskContext): Promise<ReviewSelection>;
+  collectUiEvidence?(context: TaskContext): Promise<UiEvidenceRecord>;
+  review(context: TaskContext, implementation: ImplementationResult, verification: VerificationResult, onReview?: ReviewProgress): Promise<ReviewResult[]>;
   checkpoint?(context: TaskContext): Promise<{ commit: string }>;
   finalVerify?(): Promise<VerificationResult>;
 }
@@ -57,7 +65,7 @@ export class Orchestrator {
     const maxAttempts = this.options.maxAttempts ?? 3;
     const requiredReviewers = this.options.requiredReviewers ?? ['code'];
     if (!Number.isSafeInteger(maxAttempts) || maxAttempts < 1) throw new Error('Invalid maxAttempts');
-    if (!requiredReviewers.length || new Set(requiredReviewers).size !== requiredReviewers.length) throw new Error('Invalid required reviewers');
+    if (!requiredReviewers.includes('code') || new Set(requiredReviewers).size !== requiredReviewers.length) throw new Error('Invalid required reviewers');
     const ids = new Set(tasks.map(t => t.id));
     if (ids.size !== tasks.length || ids.size !== Object.keys(state.tasks).length || tasks.some(t => !state.tasks[t.id])) throw new Error('Task plan/state mismatch');
     for (const task of tasks) if (task.dependencies.some(d => !ids.has(d) || d === task.id)) throw new Error(`Invalid dependencies: ${task.id}`);
@@ -100,7 +108,11 @@ export class Orchestrator {
         taskState.attempts.push(attempt);
         taskState.status = 'running';
         await this.store.save(state);
-        const feedback = taskState.attempts.slice(0, -1).flatMap(a => [a.verification, ...(a.reviews ?? []).map(r => r.report)].filter(x => x !== undefined));
+        const feedback = taskState.attempts.slice(0, -1).flatMap(a => [
+          ...(a.outcome === 'blocked' || a.outcome === 'failed' || a.outcome === 'interrupted' ? [a.implementationReport] : []),
+          a.verification, ...(a.reviews ?? []).map(r => r.report),
+          ...(a.uiEvidence && !a.uiEvidence.passed ? [a.uiEvidence] : [])
+        ].filter(x => x !== undefined));
         const context: TaskContext = { task: ready, attempt: attempt.number, previousFeedback: feedback };
         if (attempt.number > 1) this.options.events?.emit({type:'REPAIR_STARTED',taskId:ready.id,attempt:attempt.number});
         try {
@@ -123,15 +135,45 @@ export class Orchestrator {
               taskState.status = 'repair_pending';
               taskState.lastError = 'Deterministic verification failed';
             } else {
+              const selection = this.adapters.selectReviewers
+                ? await this.adapters.selectReviewers(context)
+                : { requiredReviewers: [...requiredReviewers], changedFiles: [], reasons: ['Static required reviewers'] };
+              const validSelection = (ids: string[]) => ids.includes('code') && new Set(ids).size === ids.length && ids.every(id => requiredReviewers.includes(id));
+              if (!validSelection(selection.requiredReviewers)) throw new Error('Invalid reviewer routing selection');
+              // A repair or resumed execution may add reviewers, but cannot shed
+              // requirements selected on an earlier attempt (including legacy reports).
+              const previousSelections = [taskState.reviewSelection, ...taskState.attempts.slice(0, -1).map(a => a.reviewSelection)].filter((s): s is ReviewSelection => s !== undefined);
+              const previousIds = [...previousSelections.flatMap(s => s.requiredReviewers), ...taskState.attempts.slice(0, -1).flatMap(a => (a.reviews ?? []).map(r => r.reviewer))];
+              const accumulated = [...new Set([...selection.requiredReviewers, ...previousIds])];
+              if (!validSelection(accumulated)) throw new Error('Previously required reviewer is no longer enabled');
+              const reviewSelection: ReviewSelection = {
+                requiredReviewers: requiredReviewers.filter(id => accumulated.includes(id)),
+                changedFiles: [...new Set([...previousSelections.flatMap(s => s.changedFiles), ...selection.changedFiles])].sort(),
+                reasons: [...new Set([...previousSelections.flatMap(s => s.reasons), ...selection.reasons])]
+              };
+              taskState.reviewSelection = reviewSelection;
+              attempt.reviewSelection = structuredClone(reviewSelection);
+              context.requiredReviewers = [...reviewSelection.requiredReviewers];
               taskState.status = 'needs_review';
               await this.store.save(state);
+              if (reviewSelection.requiredReviewers.includes('ui') && this.adapters.collectUiEvidence) {
+                const uiEvidence = await this.adapters.collectUiEvidence(context);
+                attempt.uiEvidence = uiEvidence;
+                context.uiEvidence = uiEvidence;
+                await this.store.save(state);
+                if (!uiEvidence.passed) throw new Error(`UI evidence rejected: ${uiEvidence.issues.join('; ')}`);
+              }
               this.options.events?.emit({type:'AGENT_STARTED',taskId:ready.id,agent:'reviewer',attempt:attempt.number});
-              const reviews = await this.adapters.review(context, implementation, verification);
+              const reviews = await this.adapters.review(context, implementation, verification, async review => {
+                attempt.reviews ??= [];
+                appendReviewResult(attempt.reviews, review, reviewSelection.requiredReviewers);
+                await this.store.save(state);
+              });
               this.options.events?.emit({type:'AGENT_COMPLETED',taskId:ready.id,agent:'reviewer',attempt:attempt.number});
               for (const review of reviews) this.options.events?.emit({type:review.verdict==='approved'?'REVIEW_APPROVED':review.verdict==='changes_requested'?'REVIEW_CHANGES_REQUESTED':'REVIEW_BLOCKED',taskId:ready.id,agent:review.reviewer,attempt:attempt.number});
-              attempt.reviews = reviews.map(r => ({ reviewer: r.reviewer, verdict: r.verdict, report: r.report }));
+              attempt.reviews = reconcileReviewResults(attempt.reviews ?? [], reviews);
               const byReviewer = new Map(reviews.map(r => [r.reviewer, r]));
-              const validSet = reviews.length === byReviewer.size && requiredReviewers.every(r => byReviewer.has(r));
+              const validSet = reviews.length === byReviewer.size && reviews.length === reviewSelection.requiredReviewers.length && reviewSelection.requiredReviewers.every(r => byReviewer.has(r));
               if (!validSet || reviews.some(r => r.verdict === 'blocked')) {
                 taskState.status = 'blocked';
                 taskState.lastError = 'Missing, duplicate, or blocked required review';

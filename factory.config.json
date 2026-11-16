@@ -16,6 +16,19 @@
       "timeoutMs": 300000
     }
   },
+  "reviewRouting": "task-specific",
+  "reviewers": {
+    "security": {
+      "provider": "openai-codex",
+      "model": "gpt-6.1-terra",
+      "timeoutMs": 300000
+    },
+    "ui": {
+      "provider": "openai-codex",
+      "model": "gpt-6.1-terra",
+      "timeoutMs": 300000
+    }
+  },
   "execution": {
     "maxAttempts": 3,
     "requireApprovalBeforeExecution": true

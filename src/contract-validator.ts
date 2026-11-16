@@ -5,7 +5,7 @@ import type { ErrorObject, ValidateFunction } from "ajv";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
-export type ContractName = "plan" | "implementation" | "review";
+export type ContractName = "plan" | "implementation" | "review" | "ui-evidence";
 export type ValidationIssue = {
   stage: "json" | "schema" | "semantic";
   path: string;
@@ -19,6 +19,7 @@ const CONTRACTS: Record<ContractName, string> = {
   plan: "plan.schema.json",
   implementation: "implementation.schema.json",
   review: "review.schema.json",
+  "ui-evidence": "ui-evidence.schema.json",
 };
 
 export class ContractValidator {
@@ -123,7 +124,7 @@ function validateSemantics(
     const report = value as Implementation;
     if (report.outcome === "implemented" && report.blockers.length > 0) add("/blockers", "Implemented report cannot contain blockers");
     if (report.outcome === "blocked" && report.blockers.length === 0) add("/blockers", "Blocked report requires at least one blocker");
-  } else {
+  } else if (contract === "review") {
     const report = value as Review;
     const blocking = report.findings.some(f => f.severity === "blocking");
     if (report.verdict === "approved" && blocking) add("/findings", "Approved review cannot contain blocking findings");

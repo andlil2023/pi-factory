@@ -1,6 +1,8 @@
 import { mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import type { ReviewSelection } from './review-routing.ts';
+import type { UiEvidenceRecord } from './ui-evidence.ts';
 
 export type TaskStatus = 'pending' | 'running' | 'needs_review' | 'repair_pending' | 'completed' | 'blocked';
 export type AttemptOutcome = 'implemented' | 'failed' | 'blocked' | 'interrupted';
@@ -13,6 +15,8 @@ export interface AttemptRecord {
   outcome?: AttemptOutcome;
   implementationReport?: unknown;
   verification?: unknown;
+  uiEvidence?: UiEvidenceRecord;
+  reviewSelection?: ReviewSelection;
   reviews?: Array<{ reviewer: string; verdict: ReviewVerdict; report: unknown }>;
   checkpointCommit?: string;
 }
@@ -21,8 +25,42 @@ export interface TaskState {
   id: string;
   status: TaskStatus;
   attempts: AttemptRecord[];
+  reviewSelection?: ReviewSelection;
   lastError?: string;
   checkpointCommit?: string;
+}
+
+export interface GitExecutionState {
+  worktree: string;
+  runBranch: string;
+  targetBranch: string;
+  baseCommit: string;
+  expectedHead: string;
+}
+export interface ExecutionPolicy {
+  maxAttempts: number;
+  configurationFingerprint: string;
+}
+
+export interface IntegrationAttempt {
+  number: number;
+  status: 'preparing' | 'conflicted' | 'blocked' | 'ready' | 'stale' | 'publishing' | 'published';
+  approvedAt: string;
+  worktree: string;
+  branch: string;
+  targetBranch: string;
+  targetHead: string;
+  sourceHead: string;
+  commit?: string;
+  conflicts?: string[];
+  error?: string;
+  verification?: { passed: boolean; details: unknown };
+  publicationVerification?: { passed: boolean; details: unknown };
+  reviewSelection?: ReviewSelection;
+  reviews?: AttemptRecord['reviews'];
+  uiEvidence?: UiEvidenceRecord;
+  publishApprovedAt?: string;
+  publishedAt?: string;
 }
 
 export interface FactoryRunState {
@@ -33,6 +71,10 @@ export interface FactoryRunState {
   updatedAt: string;
   status: 'planned' | 'running' | 'paused' | 'completed' | 'blocked';
   plan: unknown;
+  git?: GitExecutionState;
+  execution?: ExecutionPolicy;
+  integrations?: IntegrationAttempt[];
+  resumptions?: Array<{ approvedAt: string; previousStatus: FactoryRunState['status']; retryTask?: string }>;
   finalVerification?: { passed: boolean; details: unknown; checkedAt: string; head?: string };
   tasks: Record<string, TaskState>;
 }
@@ -61,14 +103,14 @@ export class StateStore {
     return join(this.directory, `${runId}.json`);
   }
 
-  async create(repository: string, plan: unknown, taskIds: string[], runId: string = randomUUID()): Promise<FactoryRunState> {
+  async create(repository: string, plan: unknown, taskIds: string[], runId: string = randomUUID(), metadata: { git?: GitExecutionState; execution?: ExecutionPolicy } = {}): Promise<FactoryRunState> {
     assertRunId(runId);
     if (new Set(taskIds).size !== taskIds.length || taskIds.length === 0) throw new Error('Task IDs must be unique and nonempty');
     const now = new Date().toISOString();
     const tasks: Record<string, TaskState> = Object.fromEntries(taskIds.map((id): [string, TaskState] => [id, { id, status: 'pending', attempts: [] }]));
     const state: FactoryRunState = {
       version: 1, runId, repository: resolve(repository), createdAt: now, updatedAt: now,
-      status: 'planned', plan, tasks
+      status: 'planned', plan, tasks, ...metadata
     };
     await mkdir(this.directory, { recursive: true });
     const handle = await open(this.path(runId), 'wx');
@@ -99,12 +141,12 @@ export class StateStore {
     state.updatedAt = updated.updatedAt;
   }
 
-  /** Mark incomplete process work as interrupted on restart; never silently retry. */
+  /** Caller must hold the run lock. Mark incomplete work interrupted; never silently retry. */
   async recover(runId: string): Promise<FactoryRunState> {
     const state = await this.load(runId);
     let changed = false;
     for (const task of Object.values(state.tasks)) {
-      if (task.status !== 'running') continue;
+      if (task.status !== 'running' && task.status !== 'needs_review') continue;
       const attempt = task.attempts.at(-1);
       if (attempt && !attempt.finishedAt) {
         attempt.finishedAt = new Date().toISOString();

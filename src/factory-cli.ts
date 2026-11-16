@@ -1,18 +1,26 @@
 import { FactoryEventBus } from './event-bus.ts';
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, realpath } from 'node:fs/promises';
 import { join, resolve, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { runPi } from './pi-runner.ts';
 import { ContractValidator } from './contract-validator.ts';
 import { createWorktree } from './git-worktree.ts';
-import { StateStore } from './state-store.ts';
-import { Orchestrator, type PlannedTask } from './orchestrator.ts';
-import { createAgentAdapters, type AgentModel } from './agent-adapters.ts';
+import { StateStore, type FactoryRunState } from './state-store.ts';
+import { Orchestrator, type PlannedTask, type TaskContext } from './orchestrator.ts';
+import { createAgentAdapters, requiredReviewerIds, type AgentModel, type SpecialistReviewers } from './agent-adapters.ts';
 import { createGitCheckpoint } from './git-checkpoint.ts';
 import { spawn } from 'node:child_process';
+import type { ReviewRouting } from './review-routing.ts';
+import { validateUiEvidenceCommand, type UiEvidenceCommand } from './ui-evidence.ts';
+import { acquireRunLock } from './run-lock.ts';
+import { prepareIntegration, publishIntegration, type IntegrationOptions } from './git-integration.ts';
+import { captureRunGitState, configurationFingerprint, prepareRunResume, validateRunGitState, assertRunCheckpoint } from './run-recovery.ts';
 
 interface Config {
   agents: { planner: AgentModel; implementer: AgentModel; reviewer: AgentModel };
+  reviewers?: SpecialistReviewers;
+  reviewRouting?: ReviewRouting;
+  uiEvidence?: { command: UiEvidenceCommand };
   execution?: { maxAttempts?: number };
   verification?: Array<{ executable: string; args?: string[]; timeoutMs?: number }>;
   pi?: { executable?: string; executableArgs?: string[] };
@@ -63,6 +71,14 @@ async function configFrom(flags:Record<string,string|boolean>):Promise<Config> {
   const path=resolve(typeof flags.config==='string'?flags.config:join(root,'factory.config.json'));
   const config=JSON.parse(await readFile(path,'utf8')) as Config;
   if (!config.agents?.planner || !config.agents?.implementer || !config.agents?.reviewer) throw new Error('Configuration requires agents.planner, implementer and reviewer');
+  requiredReviewerIds(config.reviewers);
+  const maxAttempts = config.execution?.maxAttempts ?? 3;
+  if (!Number.isSafeInteger(maxAttempts) || maxAttempts < 1) throw new Error('Invalid execution.maxAttempts');
+  if (config.uiEvidence !== undefined) {
+    if (!config.uiEvidence || !config.reviewers?.ui) throw new Error('uiEvidence requires an enabled UI reviewer');
+    validateUiEvidenceCommand(config.uiEvidence.command);
+  }
+  if (config.reviewRouting !== undefined && config.reviewRouting !== 'all' && config.reviewRouting !== 'task-specific') throw new Error('Invalid reviewRouting; use all or task-specific');
   return config;
 }
 async function planCommand(flags:Record<string,string|boolean>):Promise<void> {
@@ -115,45 +131,89 @@ async function runCommand(flags:Record<string,string|boolean>):Promise<void> {
   const runId=`run-${randomUUID()}`;
   // Worktree must be created before writing state into the source repository.
   const worktree=await createWorktree({repository,runId});
+  console.log(`Created run worktree: ${worktree.path}`);
+  const git = await captureRunGitState(worktree);
   const store=new StateStore(repository);
-  const state=await store.create(repository,validation.value,validation.value.tasks.map(t=>t.id),runId);
+  const release = await acquireRunLock(store.directory, runId);
+  try {
+    const state=await store.create(repository,validation.value,validation.value.tasks.map(t=>t.id),runId, {
+      git, execution: { maxAttempts:config.execution?.maxAttempts??3, configurationFingerprint:configurationFingerprint(config) }
+    });
+    await executeRun(store, state, config);
+  } finally { await release(); }
+}
+
+async function resumeCommand(flags:Record<string,string|boolean>):Promise<void> {
+  if (flags.approve !== true) throw new Error('Resume requires --approve after inspecting run state and worktree');
+  const repository=resolve(required(flags,'repo'));
+  const runId=required(flags,'run');
+  const config=await configFrom(flags);
+  if (!config.verification?.length) throw new Error('Configure trusted verification commands');
+  const store=new StateStore(repository);
+  const release=await acquireRunLock(store.directory,runId,flags['recover-lock']===true);
+  try {
+    const loaded=await store.load(runId);
+    const plan=await validator.validate<Plan>('plan',loaded.plan);
+    if (!plan.valid || plan.value.decisions.some(decision=>decision.blocking)) throw new Error('Persisted plan is invalid or has unresolved blocking decisions');
+    const ids=plan.value.tasks.map(task=>task.id);
+    if (ids.length!==Object.keys(loaded.tasks).length || ids.some(id=>!loaded.tasks[id])) throw new Error('Task plan/state mismatch');
+    const retryTask=flags['retry-task']===undefined ? undefined : required(flags,'retry-task');
+    const state=await prepareRunResume(store,loaded,repository,configurationFingerprint(config),config.execution?.maxAttempts??3,retryTask);
+    await executeRun(store,state,config);
+  } finally { await release(); }
+}
+
+async function executeRun(store:StateStore,state:FactoryRunState,config:Config):Promise<void> {
+  const {runId,repository}=state;
+  const git=state.git!;
+  const worktree={path:git.worktree};
+  const preflight=await validateRunGitState(state,repository,Object.values(state.tasks).some(task=>task.status==='repair_pending'));
+  if (preflight.targetHead!==git.baseCommit) console.log('Target branch has advanced; this run remains isolated and will need integration verification.');
   const launch=piLaunch(config);
   const adapterConfig = {repository:worktree.path,factoryRoot:root,
     piExecutable:launch.executable,piExecutableArgs:launch.executableArgs,
-    implementer:config.agents.implementer,reviewer:config.agents.reviewer,
-    verification:config.verification,baselineCommit:worktree.baseCommit};
+    implementer:config.agents.implementer,reviewer:config.agents.reviewer,reviewers:config.reviewers,reviewRouting:config.reviewRouting,
+    verification:config.verification!,baselineCommit:git.expectedHead,
+    uiEvidence:config.uiEvidence ? { command:config.uiEvidence.command, directory:join(store.directory,runId,'ui-evidence') } : undefined};
   const adapters=createAgentAdapters(adapterConfig);
   console.log(`Run ${runId}; worktree: ${worktree.path}`);
   // Git checkpoints create a fresh baseline for subsequent tasks.
-  let expectedHead = worktree.baseCommit;
+  let expectedHead = git.expectedHead;
   const integratedAdapters = {
     ...adapters,
+    implement: async (context:TaskContext) => {
+      await assertRunCheckpoint(state,context.attempt>1);
+      return adapters.implement(context);
+    },
     checkpoint: async (context: {task: PlannedTask}) => {
       const checkpoint = await createGitCheckpoint({
-        worktree: worktree.path, branch: `factory/${runId}`,
+        worktree: worktree.path, branch: git.runBranch,
         taskId: context.task.id, title: context.task.title,
         expectedHead
       });
       expectedHead = checkpoint.commit;
       adapterConfig.baselineCommit = checkpoint.commit;
+      git.expectedHead = checkpoint.commit;
       return { commit: checkpoint.commit };
     },
     finalVerify: async () => {
       // Run the same trusted commands against the final committed worktree.
+      await assertRunCheckpoint(state);
       const details: Array<{command:string;passed:boolean;stdout:string;stderr:string}> = [];
       for (const command of config.verification ?? []) {
         const outcome = await runVerificationCommand(worktree.path, command);
         details.push(outcome);
         if (!outcome.passed) return {passed:false,details};
       }
+      await assertRunCheckpoint(state);
       return {passed:true,details};
     }
   };
   const events=new FactoryEventBus({runId,logFile:join(repository,'.factory','runs',`${runId}.events.jsonl`)});
-  const orchestrator=new Orchestrator(store,integratedAdapters,{maxAttempts:config.execution?.maxAttempts??3,requiredReviewers:['code'],events});
+  const orchestrator=new Orchestrator(store,integratedAdapters,{maxAttempts:config.execution?.maxAttempts??3,requiredReviewers:requiredReviewerIds(config.reviewers),events});
   let finished;
   try {
-    finished=await orchestrator.execute(state,validation.value.tasks);
+    finished=await orchestrator.execute(state,(state.plan as Plan).tasks);
   } finally {
     await events.close();
   }
@@ -161,10 +221,57 @@ async function runCommand(flags:Record<string,string|boolean>):Promise<void> {
   for(const task of Object.values(finished.tasks)) console.log(`${task.id}: ${task.status}${task.lastError?` (${task.lastError})`:''}`);
   if(finished.status!=='completed') process.exitCode=1;
 }
+async function integrateCommand(flags:Record<string,string|boolean>):Promise<void> {
+  if (flags.approve !== true) throw new Error('Integration requires --approve; preparation and publication are separately approved');
+  if (flags.publish === true && flags['new-attempt'] !== undefined) throw new Error('--publish cannot be combined with --new-attempt');
+  if (flags.publish !== true && flags.candidate !== undefined) throw new Error('--candidate is only valid with --publish');
+  const repository=resolve(required(flags,'repo'));
+  const runId=required(flags,'run');
+  const config=await configFrom(flags);
+  if (!config.verification?.length) throw new Error('Configure trusted verification commands');
+  const store=new StateStore(repository);
+  const releaseRepository=await acquireRunLock(store.directory,'repository-integration',flags['recover-lock']===true);
+  try {
+    const releaseRun=await acquireRunLock(store.directory,runId,flags['recover-lock']===true);
+    try {
+      const state=await store.load(runId);
+      if (await realpath(repository)!==await realpath(state.repository)) throw new Error('Run repository mismatch');
+      const plan=await validator.validate<Plan>('plan',state.plan);
+      if (!plan.valid || plan.value.decisions.some(decision=>decision.blocking)) throw new Error('Persisted plan is invalid or has unresolved blocking decisions');
+      if (plan.value.tasks.length!==Object.keys(state.tasks).length || plan.value.tasks.some(task=>!state.tasks[task.id])) throw new Error('Task plan/state mismatch');
+      if (flags.target!==undefined && required(flags,'target')!==state.git?.targetBranch) throw new Error('--target must match the recorded run target branch');
+      const launch=piLaunch(config);
+      const options:IntegrationOptions={
+        configurationFingerprint:configurationFingerprint(config), enabledReviewers:requiredReviewerIds(config.reviewers),
+        task:{id:'T000',title:'Verify cumulative run integration',objective:plan.value.objective,
+          scope:plan.value.tasks.map(task=>`${task.id}: ${task.scope}`).join('\n'),
+          acceptanceCriteria:plan.value.tasks.flatMap(task=>task.acceptanceCriteria.map(criterion=>`${task.id}: ${criterion}`)),
+          dependencies:[],verification:plan.value.verification},
+        adapters:(worktree,baseline,attempt)=>createAgentAdapters({repository:worktree,factoryRoot:root,
+          piExecutable:launch.executable,piExecutableArgs:launch.executableArgs,
+          implementer:config.agents.implementer,reviewer:config.agents.reviewer,reviewers:config.reviewers,reviewRouting:config.reviewRouting,
+          verification:config.verification!,baselineCommit:baseline,
+          uiEvidence:config.uiEvidence?{command:config.uiEvidence.command,directory:join(store.directory,runId,'integration-evidence',String(attempt))}:undefined})
+      };
+      const record=flags.publish===true
+        ? await publishIntegration(store,state,options,required(flags,'candidate'))
+        : await prepareIntegration(store,state,options,flags['new-attempt']===true);
+      console.log(`Integration ${record.number}: ${record.status}; worktree: ${record.worktree}`);
+      if (record.commit) console.log(`Candidate: ${record.commit}`);
+      if (record.error) console.log(record.error);
+      if (record.conflicts?.length) console.log(`Conflicts: ${record.conflicts.join(', ')}`);
+      if (record.status==='ready') console.log('Target unchanged. Inspect the candidate, then explicitly publish with --publish --candidate SHA --approve and the same repo/run/config.');
+      if (record.status!=='ready' && record.status!=='published') process.exitCode=1;
+    } finally { await releaseRun(); }
+  } finally { await releaseRepository(); }
+}
+
 async function statusCommand(flags:Record<string,string|boolean>):Promise<void> {
   const store=new StateStore(resolve(required(flags,'repo')));
   const state=await store.load(required(flags,'run'));
   console.log(`Run ${state.runId}: ${state.status}`);
+  if (state.git) console.log(`Branch: ${state.git.runBranch}; target: ${state.git.targetBranch}; worktree: ${state.git.worktree}; checkpoint: ${state.git.expectedHead}`);
+  for (const integration of state.integrations ?? []) console.log(`Integration ${integration.number}: ${integration.status}; candidate: ${integration.commit ?? 'none'}; worktree: ${integration.worktree}`);
   for(const task of Object.values(state.tasks)) console.log(`${task.id}: ${task.status}, attempts=${task.attempts.length}${task.lastError?` — ${task.lastError}`:''}`);
 }
 async function main():Promise<void> {
@@ -172,7 +279,9 @@ async function main():Promise<void> {
   if(command==='plan') return planCommand(flags);
   if(command==='run') return runCommand(flags);
   if(command==='status') return statusCommand(flags);
-  console.log('Usage:\n  npm run factory -- plan --repo PATH --objective FILE --output FILE\n  npm run factory -- run --repo PATH --plan FILE --approve\n  npm run factory -- status --repo PATH --run RUN_ID');
+  if(command==='resume') return resumeCommand(flags);
+  if(command==='integrate') return integrateCommand(flags);
+  console.log('Usage:\n  npm run factory -- plan --repo PATH --objective FILE --output FILE\n  npm run factory -- run --repo PATH --plan FILE --approve\n  npm run factory -- status --repo PATH --run RUN_ID\n  npm run factory -- resume --repo PATH --run RUN_ID --approve [--retry-task TASK_ID] [--recover-lock]\n  npm run factory -- integrate --repo PATH --run RUN_ID --approve [--new-attempt]\n  npm run factory -- integrate --repo PATH --run RUN_ID --publish --candidate SHA --approve');
   if(command) process.exitCode=1;
 }
 main().catch(e=>{console.error(e instanceof Error?e.stack:e);process.exitCode=1;});

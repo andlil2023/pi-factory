@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -47,6 +47,39 @@ test('rejects unsafe IDs and duplicate run IDs', async t => {
   const info = await createWorktree(options);
   await assert.rejects(createWorktree(options));
   await removeWorktree(info);
+});
+
+test('matches registered worktrees through directory aliases and still preserves dirty work', async t => {
+  const { dir, repository } = await fixture(t);
+  const worktreesDirectory = join(dir, 'worktrees');
+  await mkdir(worktreesDirectory);
+  const alias = join(dir, 'worktrees-alias');
+  await symlink(await realpath(worktreesDirectory), alias, process.platform === 'win32' ? 'junction' : 'dir');
+  const info = await createWorktree({ repository, runId: 'run-alias', worktreesDirectory });
+  const aliasedInfo = { ...info, path: join(alias, 'run-alias') };
+  await writeFile(join(info.path, 'README.md'), 'preserve me\n');
+  await assert.rejects(removeWorktree(aliasedInfo), /failed/);
+  assert.equal(await readFile(join(info.path, 'README.md'), 'utf8'), 'preserve me\n');
+  git(info.path, 'add', '.');
+  git(info.path, 'commit', '-m', 'change');
+  await removeWorktree(aliasedInfo);
+  assert.doesNotMatch(git(repository, 'worktree', 'list', '--porcelain'), /run-alias/);
+});
+
+test('handles paths quoted by ordinary Git porcelain', async t => {
+  const { dir, repository } = await fixture(t);
+  const info = await createWorktree({ repository, runId: 'run-unicode', worktreesDirectory: join(dir, 'worktrees-å') });
+  await removeWorktree(info);
+  assert.doesNotMatch(git(repository, 'worktree', 'list', '--porcelain', '-z'), /run-unicode/);
+});
+
+test('refuses to remove existing directories that are not registered worktrees', async t => {
+  const { dir, repository } = await fixture(t);
+  const path = join(dir, 'unregistered');
+  await mkdir(path);
+  await writeFile(join(path, 'keep.txt'), 'keep');
+  await assert.rejects(removeWorktree({ repository, path, branch: 'factory/unregistered', baseCommit: git(repository, 'rev-parse', 'HEAD') }), /not registered/);
+  assert.equal(await readFile(join(path, 'keep.txt'), 'utf8'), 'keep');
 });
 
 test('refuses dirty source repositories', async t => {
