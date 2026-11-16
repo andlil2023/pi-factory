@@ -48,7 +48,7 @@ export interface ExecutionPolicy {
 
 export interface IntegrationAttempt {
   number: number;
-  status: 'preparing' | 'conflicted' | 'blocked' | 'ready' | 'stale' | 'publishing' | 'published';
+  status: 'preparing' | 'conflicted' | 'blocked' | 'ready' | 'stale' | 'publishing' | 'published' | 'pr-publishing' | 'pr-opened';
   approvedAt: string;
   worktree: string;
   branch: string;
@@ -65,6 +65,7 @@ export interface IntegrationAttempt {
   uiEvidence?: UiEvidenceRecord;
   publishApprovedAt?: string;
   publishedAt?: string;
+  pullRequest?: { repository: string; remote: string; pushUrl: string; base: string; baseSha: string; head: string; headSha: string; url?: string };
 }
 
 export interface FactoryRunState {

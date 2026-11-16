@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 import { assertCheckoutCheckpoint, validateRunGitState } from './run-recovery.ts';
 import { assertUiEvidenceCurrent } from './ui-evidence.ts';
 import { appendReviewResult, reconcileReviewResults } from './review-results.ts';
+import * as github from './github-pr.ts';
 import type { FactoryRunState, IntegrationAttempt, StateStore } from './state-store.ts';
 import type { OrchestratorAdapters, PlannedTask, TaskContext } from './orchestrator.ts';
 
@@ -13,6 +14,8 @@ async function git(cwd: string, args: string[]): Promise<string> {
   const { stdout } = await exec('git', args, { cwd, windowsHide: true, maxBuffer: 4 * 1024 * 1024 });
   return stdout.trim();
 }
+export async function hasGitRemote(repository: string): Promise<boolean> { return Boolean(await git(repository, ['remote'])); }
+
 export interface IntegrationOptions {
   configurationFingerprint: string;
   enabledReviewers: string[];
@@ -20,6 +23,8 @@ export interface IntegrationOptions {
   adapters(worktree: string, baseline: string, attempt: number): OrchestratorAdapters;
   /** Trusted, configured preparation of a fresh integration worktree (for example dependency install). Throws on failure. */
   setup?(worktree: string): Promise<void>;
+  /** Dependency injection for independently tested GitHub transport. */
+  github?: Pick<typeof github, 'githubDestination' | 'remoteHead' | 'pushCandidate' | 'createPullRequest' | 'verifyPullRequest'>;
 }
 
 function eligible(state: FactoryRunState, options: IntegrationOptions): void {
@@ -54,7 +59,10 @@ async function assertCandidate(state: FactoryRunState, record: IntegrationAttemp
 function contextFor(state: FactoryRunState, record: IntegrationAttempt, options: IntegrationOptions): TaskContext {
   return {
     task: options.task, attempt: record.number,
-    previousFeedback: (state.integrations ?? []).filter(previous => previous.number < record.number).flatMap(previous => [previous.verification, ...(previous.reviews ?? []).map(review => review.report), previous.uiEvidence, previous.error].filter(value => value !== undefined)),
+    previousFeedback: [
+      ...(state.resumptions ?? []).filter(entry => entry.retryTask && state.tasks[entry.retryTask]?.status === 'completed' && entry.guidance).map(entry => ({ taskId: entry.retryTask, operatorReportedEvidence: entry.guidance })),
+      ...(state.integrations ?? []).filter(previous => previous.number < record.number).flatMap(previous => [previous.verification, ...(previous.reviews ?? []).map(review => review.report), previous.uiEvidence, previous.error].filter(value => value !== undefined))
+    ],
     requiredReviewers: record.reviewSelection?.requiredReviewers,
     uiEvidence: record.uiEvidence
   };
@@ -65,7 +73,7 @@ export async function prepareIntegration(store: StateStore, state: FactoryRunSta
   eligible(state, options);
   const observed = await validateRunGitState(state, state.repository);
   const previous = [...(state.integrations ?? [])];
-  if (previous.some(record => record.status === 'published' || record.status === 'publishing')) throw new Error('Integration already published or publication needs manual reconciliation');
+  if (previous.some(record => record.status === 'published' || record.status === 'publishing' || record.status === 'pr-publishing' || record.status === 'pr-opened')) throw new Error('Integration already published or publication needs manual reconciliation');
   if (previous.length && !newAttempt) throw new Error('An integration attempt already exists; inspect it, then publish the ready candidate or explicitly pass --new-attempt');
   if (previous.length >= state.execution!.maxAttempts) throw new Error('Integration attempt budget exhausted');
   let included = false;
@@ -140,8 +148,7 @@ export async function prepareIntegration(store: StateStore, state: FactoryRunSta
   return record;
 }
 
-/** Explicit second approval names the exact reviewed commit; never rewrites target history. */
-export async function publishIntegration(store: StateStore, state: FactoryRunState, options: IntegrationOptions, candidate: string): Promise<IntegrationAttempt> {
+async function publicationPreflight(store: StateStore, state: FactoryRunState, options: IntegrationOptions, candidate: string): Promise<IntegrationAttempt> {
   eligible(state, options);
   const record = state.integrations?.at(-1);
   if (!record || record.status !== 'ready' || record.commit !== candidate) throw new Error('Publication requires the latest ready candidate and its exact --candidate SHA');
@@ -170,6 +177,14 @@ export async function publishIntegration(store: StateStore, state: FactoryRunSta
     await store.save(state);
     throw error;
   }
+  return record;
+}
+
+/** Explicit second approval names the exact reviewed commit; never rewrites target history. */
+export async function publishIntegration(store: StateStore, state: FactoryRunState, options: IntegrationOptions, candidate: string): Promise<IntegrationAttempt> {
+  if (await git(state.repository, ['remote'])) throw new Error('Local publication is disabled for repositories with configured remotes; use GitHub PR publication');
+  const record = await publicationPreflight(store, state, options, candidate);
+  if (await git(state.repository, ['remote'])) throw new Error('Local publication is disabled for repositories with configured remotes; use GitHub PR publication');
   record.status = 'publishing';
   record.publishApprovedAt = new Date().toISOString();
   await store.save(state);
@@ -187,4 +202,40 @@ export async function publishIntegration(store: StateStore, state: FactoryRunSta
     throw error;
   }
   return record;
+}
+
+/** Open a GitHub PR for the exact reviewed candidate; never merge or enable auto-merge. */
+export async function publishPullRequest(store: StateStore, state: FactoryRunState, options: IntegrationOptions, candidate: string): Promise<IntegrationAttempt> {
+  const record = await publicationPreflight(store, state, options, candidate);
+  const api = options.github ?? github;
+  const destination = await api.githubDestination(state.repository, record.targetBranch, record.targetHead, record.branch, candidate);
+  if (await api.remoteHead(state.repository, destination.pushUrl, destination.base) !== destination.baseSha) throw new Error('GitHub base differs from the reviewed target; prepare a new candidate');
+  if (await api.remoteHead(state.repository, destination.pushUrl, destination.head) !== undefined) throw new Error('GitHub candidate branch already exists; inspect it before proceeding');
+  await assertPinnedRefs(state, record);
+  await assertCandidate(state, record);
+  record.pullRequest = { ...destination };
+  record.status = 'pr-publishing';
+  record.publishApprovedAt = new Date().toISOString();
+  await store.save(state);
+  try {
+    await api.pushCandidate(state.repository, destination);
+    if (await api.remoteHead(state.repository, destination.pushUrl, destination.head) !== candidate) throw new Error('Remote candidate changed');
+    if (await api.remoteHead(state.repository, destination.pushUrl, destination.base) !== destination.baseSha) throw new Error('Remote base changed');
+    const current = await api.githubDestination(state.repository, record.targetBranch, record.targetHead, record.branch, candidate);
+    if (JSON.stringify(current) !== JSON.stringify(destination)) throw new Error('Remote destination changed');
+    await assertPinnedRefs(state, record);
+    await assertCandidate(state, record);
+    record.pullRequest.url = await api.createPullRequest(state.repository, destination);
+    await store.save(state);
+    await api.verifyPullRequest(state.repository, destination, record.pullRequest.url);
+    if (await api.remoteHead(state.repository, destination.pushUrl, destination.head) !== candidate || await api.remoteHead(state.repository, destination.pushUrl, destination.base) !== destination.baseSha) throw new Error('Remote refs changed after PR creation');
+    record.status = 'pr-opened';
+    await store.save(state);
+    return record;
+  } catch {
+    record.status = 'pr-publishing';
+    record.error = 'GitHub publication needs manual reconciliation; inspect the remote branch and pull requests before taking further action';
+    await store.save(state);
+    throw new Error(record.error);
+  }
 }

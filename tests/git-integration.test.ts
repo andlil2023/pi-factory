@@ -9,7 +9,7 @@ import { StateStore } from '../src/state-store.ts';
 import { createWorktree } from '../src/git-worktree.ts';
 import { createGitCheckpoint } from '../src/git-checkpoint.ts';
 import { captureRunGitState } from '../src/run-recovery.ts';
-import { prepareIntegration, publishIntegration, type IntegrationOptions } from '../src/git-integration.ts';
+import { prepareIntegration, publishIntegration, publishPullRequest, type IntegrationOptions } from '../src/git-integration.ts';
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
@@ -67,6 +67,104 @@ test('preparation verifies and reviews a separate merge, publication needs its e
   assert.equal(git(repository, 'status', '--porcelain'), '');
   assert.deepEqual(counts(), { verified: 2, reviewed: 1 });
   assert.equal((await store.load(state.runId)).integrations?.[0].status, 'published');
+});
+
+test('remote-backed repositories cannot publish by merging the local target', async t => {
+  const { repository, store, state, options } = await fixture(t);
+  const record = await prepareIntegration(store, state, options);
+  assert.equal(record.status, 'ready', record.error);
+  git(repository, 'remote', 'add', 'origin', 'https://github.com/example/project.git');
+  const target = git(repository, 'rev-parse', 'HEAD');
+  await assert.rejects(publishIntegration(store, state, options, record.commit!), /Local publication is disabled/);
+  assert.equal(git(repository, 'rev-parse', 'HEAD'), target);
+  assert.equal(record.status, 'ready');
+});
+
+test('publication rechecks remotes after verification', async t => {
+  const { repository, store, state, options } = await fixture(t);
+  const record = await prepareIntegration(store, state, options);
+  assert.equal(record.status, 'ready', record.error);
+  options.adapters = () => ({
+    implement: async () => { assert.fail(); },
+    verify: async () => { git(repository, 'remote', 'add', 'origin', 'https://github.com/example/project.git'); return { passed: true, details: {} }; },
+    review: async () => { assert.fail(); }
+  });
+  const target = git(repository, 'rev-parse', 'HEAD');
+  await assert.rejects(publishIntegration(store, state, options, record.commit!), /Local publication is disabled/);
+  assert.equal(git(repository, 'rev-parse', 'HEAD'), target);
+  assert.equal(record.status, 'ready');
+});
+
+test('GitHub publication pushes the reviewed candidate and records an open PR, not a merge', async t => {
+  const { repository, store, state, options } = await fixture(t);
+  const record = await prepareIntegration(store, state, options);
+  assert.equal(record.status, 'ready', record.error);
+  let pushed = false;
+  options.github = {
+    githubDestination: async (_cwd, base, baseSha, head, headSha) => ({ remote: 'origin', pushUrl: 'https://github.com/owner/repo.git', repository: 'owner/repo', base, baseSha, head, headSha }),
+    remoteHead: async (_cwd, _remote, branch) => branch === record.targetBranch ? record.targetHead : pushed ? record.commit : undefined,
+    pushCandidate: async (_cwd, d) => { assert.equal(d.headSha, record.commit); pushed = true; },
+    createPullRequest: async (_cwd, d) => { assert.equal(d.baseSha, record.targetHead); return 'https://github.com/owner/repo/pull/1'; },
+    verifyPullRequest: async () => {}
+  };
+  const result = await publishPullRequest(store, state, options, record.commit!);
+  assert.equal(result.status, 'pr-opened');
+  assert.equal(result.pullRequest?.url, 'https://github.com/owner/repo/pull/1');
+  assert.equal(git(repository, 'rev-parse', 'HEAD'), record.targetHead);
+  assert.equal((await store.load(state.runId)).integrations?.[0].status, 'pr-opened');
+  await assert.rejects(prepareIntegration(store, state, options, true), /already published/);
+});
+
+test('GitHub publication fails closed on a moved base or an ambiguous push', async t => {
+  const { store, state, options } = await fixture(t);
+  const record = await prepareIntegration(store, state, options);
+  let moved = true;
+  options.github = {
+    githubDestination: async (_cwd, base, baseSha, head, headSha) => ({ remote: 'origin', pushUrl: 'https://github.com/owner/repo.git', repository: 'owner/repo', base, baseSha, head, headSha }),
+    remoteHead: async (_cwd, _remote, branch) => branch === record.targetBranch ? (moved ? 'other' : record.targetHead) : undefined,
+    pushCandidate: async () => { throw new Error('ambiguous timeout'); },
+    createPullRequest: async () => { assert.fail('must not create PR'); },
+    verifyPullRequest: async () => { assert.fail('must not verify PR'); }
+  };
+  await assert.rejects(publishPullRequest(store, state, options, record.commit!), /base differs/);
+  assert.equal(record.status, 'ready');
+  moved = false;
+  await assert.rejects(publishPullRequest(store, state, options, record.commit!), /manual reconciliation/);
+  assert.equal(record.status, 'pr-publishing');
+  assert.equal((await store.load(state.runId)).integrations?.[0].status, 'pr-publishing');
+  await assert.rejects(publishPullRequest(store, state, options, record.commit!), /latest ready/);
+});
+
+test('a PR that becomes stale during creation stays in manual reconciliation', async t => {
+  const { store, state, options } = await fixture(t);
+  const record = await prepareIntegration(store, state, options);
+  let pushed = false, created = false;
+  options.github = {
+    githubDestination: async (_cwd, base, baseSha, head, headSha) => ({ remote: 'origin', pushUrl: 'https://github.com/owner/repo.git', repository: 'owner/repo', base, baseSha, head, headSha }),
+    remoteHead: async (_cwd, _remote, branch) => branch === record.targetBranch ? (created ? 'moved' : record.targetHead) : pushed ? record.commit : undefined,
+    pushCandidate: async () => { pushed = true; },
+    createPullRequest: async () => { created = true; return 'https://github.com/owner/repo/pull/2'; },
+    verifyPullRequest: async () => {}
+  };
+  await assert.rejects(publishPullRequest(store, state, options, record.commit!), /manual reconciliation/);
+  assert.equal(record.status, 'pr-publishing');
+  assert.equal((await store.load(state.runId)).integrations?.[0].pullRequest?.url, 'https://github.com/owner/repo/pull/2');
+});
+
+test('integration review receives completed task guidance as prior evidence, not automatic approval', async t => {
+  const { store, state, options } = await fixture(t);
+  state.resumptions = [{ approvedAt: new Date().toISOString(), previousStatus: 'blocked', retryTask: 'T001', guidance: 'Operator reports a manual UI check; evidence at example.png' }];
+  options.adapters = () => ({
+    implement: async () => { assert.fail(); },
+    verify: async () => ({ passed: true, details: {} }),
+    review: async context => {
+      assert.deepEqual(context.previousFeedback[0], { taskId: 'T001', operatorReportedEvidence: 'Operator reports a manual UI check; evidence at example.png' });
+      assert.equal(context.operatorGuidance, undefined);
+      return [{ reviewer: 'code', verdict: 'blocked', report: { limitation: 'Evidence not independently inspected' } }];
+    }
+  });
+  const record = await prepareIntegration(store, state, options);
+  assert.equal(record.status, 'blocked');
 });
 
 test('merges against the current advanced target rather than the original base', async t => {
