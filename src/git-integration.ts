@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { mkdir, realpath } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { assertCheckoutCheckpoint, validateRunGitState } from './run-recovery.ts';
+import { assertCheckoutCheckpoint, validateRunGitState, MAX_GUIDANCE_LENGTH } from './run-recovery.ts';
 import { assertUiEvidenceCurrent } from './ui-evidence.ts';
 import { appendReviewResult, reconcileReviewResults } from './review-results.ts';
 import * as github from './github-pr.ts';
@@ -20,6 +20,8 @@ export interface IntegrationOptions {
   configurationFingerprint: string;
   enabledReviewers: string[];
   task: PlannedTask;
+  /** Approved preparation input only; cannot be changed during publication. */
+  guidance?: string;
   adapters(worktree: string, baseline: string, attempt: number): OrchestratorAdapters;
   /** Trusted, configured preparation of a fresh integration worktree (for example dependency install). Throws on failure. */
   setup?(worktree: string): Promise<void>;
@@ -58,9 +60,19 @@ async function assertCandidate(state: FactoryRunState, record: IntegrationAttemp
 }
 function contextFor(state: FactoryRunState, record: IntegrationAttempt, options: IntegrationOptions): TaskContext {
   return {
-    task: options.task, attempt: record.number,
+    task: options.task, plan: structuredClone(state.plan), attempt: record.number,
+    integrationEvidence: {
+      sourceRepository: state.repository,
+      sourceWorktree: state.git!.worktree,
+      taskGuidance: (state.resumptions ?? []).flatMap(entry => entry.retryTask && state.tasks[entry.retryTask]?.status === 'completed' && entry.guidance
+        ? [{ taskId: entry.retryTask, approvedAt: entry.approvedAt, text: entry.guidance }] : []),
+      integrationGuidance: (state.integrations ?? []).flatMap(entry => entry.number <= record.number && entry.guidance
+        ? [{ attempt: entry.number, approvedAt: entry.approvedAt, text: entry.guidance }] : []),
+      taskVerification: Object.values(state.tasks).filter(task => task.status === 'completed').flatMap(task => task.attempts.flatMap(attempt => attempt.verification === undefined ? [] : [{
+        taskId: task.id, attempt: attempt.number, checkpoint: attempt.checkpointCommit, result: structuredClone(attempt.verification)
+      }]))
+    },
     previousFeedback: [
-      ...(state.resumptions ?? []).filter(entry => entry.retryTask && state.tasks[entry.retryTask]?.status === 'completed' && entry.guidance).map(entry => ({ taskId: entry.retryTask, operatorReportedEvidence: entry.guidance })),
       ...(state.integrations ?? []).filter(previous => previous.number < record.number).flatMap(previous => [previous.verification, ...(previous.reviews ?? []).map(review => review.report), previous.uiEvidence, previous.error].filter(value => value !== undefined))
     ],
     requiredReviewers: record.reviewSelection?.requiredReviewers,
@@ -71,6 +83,7 @@ function contextFor(state: FactoryRunState, record: IntegrationAttempt, options:
 /** Caller holds run + repository integration locks and obtained explicit preparation approval. */
 export async function prepareIntegration(store: StateStore, state: FactoryRunState, options: IntegrationOptions, newAttempt = false): Promise<IntegrationAttempt> {
   eligible(state, options);
+  if (options.guidance !== undefined && (typeof options.guidance !== 'string' || !options.guidance.trim() || options.guidance.length > MAX_GUIDANCE_LENGTH)) throw new Error(`Integration guidance must contain 1-${MAX_GUIDANCE_LENGTH} characters`);
   const observed = await validateRunGitState(state, state.repository);
   const previous = [...(state.integrations ?? [])];
   if (previous.some(record => record.status === 'published' || record.status === 'publishing' || record.status === 'pr-publishing' || record.status === 'pr-opened')) throw new Error('Integration already published or publication needs manual reconciliation');
@@ -83,6 +96,7 @@ export async function prepareIntegration(store: StateStore, state: FactoryRunSta
   const number = previous.length + 1;
   const record: IntegrationAttempt = {
     number, status: 'preparing', approvedAt: new Date().toISOString(),
+    ...(options.guidance === undefined ? {} : { guidance: options.guidance.trim() }),
     worktree: join(dirname(await realpath(state.repository)), '.factory-integrations', state.runId, `attempt-${number}`),
     branch: `factory-integration/${state.runId}-${number}`, targetBranch: state.git!.targetBranch,
     targetHead: observed.targetHead, sourceHead: state.git!.expectedHead
@@ -150,6 +164,7 @@ export async function prepareIntegration(store: StateStore, state: FactoryRunSta
 
 async function publicationPreflight(store: StateStore, state: FactoryRunState, options: IntegrationOptions, candidate: string): Promise<IntegrationAttempt> {
   eligible(state, options);
+  if (options.guidance !== undefined) throw new Error('Publication cannot change integration guidance; prepare a new reviewed candidate');
   const record = state.integrations?.at(-1);
   if (!record || record.status !== 'ready' || record.commit !== candidate) throw new Error('Publication requires the latest ready candidate and its exact --candidate SHA');
   try {

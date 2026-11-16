@@ -295,6 +295,8 @@ async function executeRun(store:StateStore,state:FactoryRunState,config:Config):
 }
 async function integrateCommand(flags:Record<string,string|boolean>):Promise<void> {
   if (flags.approve !== true) throw new Error('Integration requires --approve; preparation and publication are separately approved');
+  if (flags.publish === true && flags.guidance !== undefined) throw new Error('--guidance is only valid when preparing an integration candidate');
+  const integrationGuidance = await guidanceFrom(flags);
   if (flags.publish === true && flags['new-attempt'] !== undefined) throw new Error('--publish cannot be combined with --new-attempt');
   if (flags.publish !== true && flags.candidate !== undefined) throw new Error('--candidate is only valid with --publish');
   const repository=resolve(required(flags,'repo'));
@@ -314,6 +316,7 @@ async function integrateCommand(flags:Record<string,string|boolean>):Promise<voi
       if (flags.target!==undefined && required(flags,'target')!==state.git?.targetBranch) throw new Error('--target must match the recorded run target branch');
       const launch=piLaunch(config);
       const options:IntegrationOptions={
+        guidance: integrationGuidance,
         configurationFingerprint:configurationFingerprint(config), enabledReviewers:requiredReviewerIds(config.reviewers),
         task:{id:'T000',title:'Verify cumulative run integration',objective:plan.value.objective,
           scope:plan.value.tasks.map(task=>`${task.id}: ${task.scope}`).join('\n'),
@@ -373,7 +376,7 @@ async function main():Promise<void> {
   if(command==='replan') return replanCommand(flags);
   if(command==='amend') return amendCommand(flags);
   if(command==='integrate') return integrateCommand(flags);
-  console.log('Usage:\n  npm run factory -- plan --repo PATH --objective FILE --output FILE\n  npm run factory -- run --repo PATH --plan FILE --approve\n  npm run factory -- status --repo PATH --run RUN_ID\n  npm run factory -- resume --repo PATH --run RUN_ID --approve [--retry-task TASK_ID [--guidance FILE]] [--recover-lock]\n  npm run factory -- replan --repo PATH --run RUN_ID --output FILE [--guidance FILE]\n  npm run factory -- amend --repo PATH --run RUN_ID --plan FILE --approve\n  npm run factory -- integrate --repo PATH --run RUN_ID --approve [--new-attempt]\n  npm run factory -- integrate --repo PATH --run RUN_ID --publish --candidate SHA --approve');
+  console.log('Usage:\n  npm run factory -- plan --repo PATH --objective FILE --output FILE\n  npm run factory -- run --repo PATH --plan FILE --approve\n  npm run factory -- status --repo PATH --run RUN_ID\n  npm run factory -- resume --repo PATH --run RUN_ID --approve [--retry-task TASK_ID [--guidance FILE]] [--recover-lock]\n  npm run factory -- replan --repo PATH --run RUN_ID --output FILE [--guidance FILE]\n  npm run factory -- amend --repo PATH --run RUN_ID --plan FILE --approve\n  npm run factory -- integrate --repo PATH --run RUN_ID --approve [--new-attempt] [--guidance FILE]\n  npm run factory -- integrate --repo PATH --run RUN_ID --publish --candidate SHA --approve');
   if(command) process.exitCode=1;
 }
 main().catch(e=>{console.error(e instanceof Error?e.stack:e);process.exitCode=1;});

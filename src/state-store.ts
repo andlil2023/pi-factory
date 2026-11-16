@@ -47,6 +47,8 @@ export interface ExecutionPolicy {
 }
 
 export interface IntegrationAttempt {
+  /** Operator text approved at preparation; retained for later attempts, never automatic proof. */
+  guidance?: string;
   number: number;
   status: 'preparing' | 'conflicted' | 'blocked' | 'ready' | 'stale' | 'publishing' | 'published' | 'pr-publishing' | 'pr-opened';
   approvedAt: string;
