@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { runPi } from './pi-runner.ts';
 import { ContractValidator } from './contract-validator.ts';
 import { createWorktree } from './git-worktree.ts';
-import { StateStore, consumedAttempts, type FactoryRunState, type TaskState } from './state-store.ts';
+import { StateStore, consumedAttempts, consumedInfraRetries, type FactoryRunState, type TaskState } from './state-store.ts';
 import { Orchestrator, type PlannedTask, type TaskContext } from './orchestrator.ts';
 import { createAgentAdapters, requiredReviewerIds, type AgentModel, type SpecialistReviewers } from './agent-adapters.ts';
 import { createGitCheckpoint } from './git-checkpoint.ts';
@@ -353,9 +353,15 @@ async function statusCommand(flags:Record<string,string|boolean>):Promise<void> 
   console.log(`Run ${state.runId}: ${state.status}`);
   if (state.git) console.log(`Branch: ${state.git.runBranch}; target: ${state.git.targetBranch}; worktree: ${state.git.worktree}; checkpoint: ${state.git.expectedHead}`);
   for (const integration of state.integrations ?? []) console.log(`Integration ${integration.number}: ${integration.status}; candidate: ${integration.commit ?? 'none'}; worktree: ${integration.worktree}`);
-  for(const task of Object.values(state.tasks)) console.log(`${task.id}: ${task.status}, attempts=${task.attempts.length} (budget used ${consumedAttempts(task)}/${state.execution?.maxAttempts??'?'})${task.lastError?` — ${task.lastError}`:''}`);
+  for(const task of Object.values(state.tasks)) {
+    const infraRetries = consumedInfraRetries(task);
+    console.log(`${task.id}: ${task.status}, attempts=${task.attempts.length} (budget used ${consumedAttempts(task)}/${state.execution?.maxAttempts??'?'})${infraRetries ? `, infrastructure retries used=${infraRetries}` : ''}${task.lastError?` — ${task.lastError}`:''}`);
+  }
   for(const task of Object.values(state.tasks)) if(task.status==='blocked') console.log(nextStep(task,state.execution?.maxAttempts));
-  for(const entry of state.supersededTasks ?? []) console.log(`${entry.task.id}: superseded by plan amendment, attempts=${entry.task.attempts.length}`);
+  for(const entry of state.supersededTasks ?? []) {
+    const infraRetries = consumedInfraRetries(entry.task);
+    console.log(`${entry.task.id}: superseded by plan amendment, attempts=${entry.task.attempts.length}${infraRetries ? `, infrastructure retries used=${infraRetries}` : ''}`);
+  }
 }
 async function main():Promise<void> {
   const {command,flags}=argsMap(process.argv.slice(2));
