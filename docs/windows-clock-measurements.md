@@ -1,0 +1,66 @@
+# Windows clock exchange measurements
+
+## Reproduction
+
+On Windows with Node v24.12.0, from the repository root (PowerShell):
+
+```powershell
+node --version
+node -p "JSON.stringify({platform:process.platform,arch:process.arch,release:require('node:os').release(),uv:process.versions.uv})"
+powershell -NoProfile -Command '[System.Diagnostics.Stopwatch]::Frequency'
+$scratch = Join-Path $env:TEMP ([guid]::NewGuid().ToString())
+New-Item -ItemType Directory -Path $scratch | Out-Null
+$utf8 = [System.Text.UTF8Encoding]::new($false)
+foreach ($mode in @('ipc', 'worker')) {
+  $json = node tests/fixtures/clock-exchanges.cjs $mode
+  if ($LASTEXITCODE -ne 0) { throw "Probe failed: $mode" }
+  [System.IO.File]::WriteAllText((Join-Path $scratch "$mode.json"), ($json -join "`n"), $utf8)
+}
+node tests/fixtures/clock-summarize.cjs (Join-Path $scratch 'ipc.json') (Join-Path $scratch 'worker.json')
+```
+
+The explicit BOM-free UTF-8 capture works in Windows PowerShell 5.1; native-command `>` there writes UTF-16LE and must not be used for these JSON files. The fresh scratch directory is private working data; remove it when no longer needed. Each run records 1,000 sequential request/response exchanges. `ipc` uses a persistent child process; `worker` uses a worker thread in the same process. Start fresh processes for independent runs. Output contains wall timestamps and monotonic readings: keep raw files private, outside version control, and review any exported output for identifiers and secrets. Summaries below contain no raw timestamps or host identifiers. The summarizer prints its input path; remove paths before sharing. No machine name, user name, environment variables or filesystem paths are captured in probe JSON. Operating system release and runtime versions are recorded; capture PowerShell/.NET version and Stopwatch frequency separately for native comparisons. Environment details may themselves be identifying.
+
+The supplied native experiment requires its original `clock-native-probe.cjs` and `clock-native-child.ps1` in `.factory` relative to the working directory. Run the supplied probe from that directory's repository root, capture its output with the same BOM-free UTF-8 method above (checking `$LASTEXITCODE`), and summarize the private file with `clock-summarize.cjs`. It invokes Windows PowerShell, sends 1,000 lines to one process and compares Node Date.now with GetSystemTimePreciseAsFileTime. The supplied script multiplies Stopwatch ticks by 100: this assumes a frequency of 10,000,000 ticks/second. Check the frequency on the measurement host; do not use its results as nanoseconds if that assumption fails. None of the supplied files were modified.
+
+The measurements below were recomputed from the supplied raw JSON with the summarizer. The supplied IPC and worker files report Windows and Node v24.12.0; native files report Node v24.12.0 but do not record platform or Stopwatch frequency. An independent operator reproduction on Windows x64 with Node v24.12.0, libuv 1.51.0 and Stopwatch frequency 10,000,000 Hz produced the following sanitized summaries (ms):
+
+| Probe | Count | Minimum ms | Maximum ms |
+|---|---:|---:|---:|
+| IPC | 1000 | -0.2469 | 0.99015 |
+| worker | 1000 | -0.11945 | 0.9953 |
+| native | 1000 | -0.14075 | 1.26635 |
+
+The reproduction frequency does not prove the historical frequency. The operator independently executed the exact PowerShell block above with Windows PowerShell 5.1 on Windows x64, Node v24.12.0, libuv 1.51.0 and Stopwatch frequency 10,000,000 Hz. Both files parsed successfully and the command exited 0. Sanitized summaries (ms):
+
+| Probe | Count | Minimum ms | Maximum ms |
+|---|---:|---:|---:|
+| IPC | 1000 | -3.2881 | -2.00955 |
+| worker | 1000 | -0.07625 | 0.99595 |
+
+## Method and observed results
+
+For each exchange, a wall read is bracketed by monotonic reads `a` and `b` in the parent before sending and in the peer on receipt. The reported estimate is peer wall minus parent wall minus the difference between monotonic bracket midpoints, converted to milliseconds. Positive means the peer's wall clock was ahead after this elapsed-time correction. The supplied native child reports integer milliseconds from the precise Windows wall clock instead of Date.now. Numbers below are extrema of per-exchange estimates, rounded to four decimal places, not confidence intervals.
+
+| Recording | Count | Minimum ms | Maximum ms |
+|---|---:|---:|---:|
+| IPC unnumbered | 1000 | -1.0418 | 0.3854 |
+| IPC 1 | 1000 | -1.1651 | 0.0210 |
+| IPC 2 | 1000 | 8.9211 | 9.9925 |
+| IPC 3 | 1000 | -4.2838 | -3.0098 |
+| IPC 4 | 1000 | -14.1671 | -13.0092 |
+| IPC 5 | 1000 | -5.3852 | -4.0083 |
+| worker 1 | 1000 | -0.0474 | 0.9961 |
+| worker 2 | 1000 | -0.0770 | 0.9961 |
+| worker 3 | 1000 | -0.6592 | 0.9961 |
+| worker 4 | 1000 | -0.1582 | 0.9943 |
+| worker 5 | 1000 | -0.1026 | 0.9964 |
+| native 1 | 1000 | -0.3267 | 0.9974 |
+| native 2 | 1000 | -0.1255 | 1.1952 |
+| native 3 | 1000 | -0.1085 | 1.4133 |
+
+A separate supplied one-shot process probe recorded 100 already-derived midpoint offsets, range -10.3886 to 1.3874 ms; 23 had absolute magnitude over 1 ms. These counts and extrema were recomputed from its recorded derived values, but the original monotonic bracket readings were not saved, so the individual derived offsets cannot be independently reconstructed. It is not part of the 1,000-exchange comparison.
+
+These estimates assume Node hrtime readings share a comparable monotonic epoch and rate across the compared processes and threads. The native comparison additionally assumes Stopwatch and Node hrtime share a compatible epoch and rate, and the conversion above is correct. These are assumptions, not proven by the probes. Bracket midpoint choice introduces uncertainty up to half the combined bracket widths if the wall read occurred anywhere inside each bracket; integer millisecond wall readings add quantization uncertainty. Scheduling delays, initial startup, wall-clock adjustment, clock drift and sampling only a short correlated sequence add uncertainty. The after sample is recorded but not used for the table. A midpoint is an estimate, not a rigorous bound on a persistent clock offset.
+
+The observations show varying corrected cross-process offsets in these recordings, and smaller observed worker and native ranges under the stated assumptions. They do not establish why individual offsets occurred, external clock accuracy, a universal bound, or behavior on other hosts or versions. Repeated samples within one run are not independent trials. No validation tolerance is assessed or changed here.
