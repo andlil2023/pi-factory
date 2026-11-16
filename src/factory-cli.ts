@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { runPi } from './pi-runner.ts';
 import { ContractValidator } from './contract-validator.ts';
 import { createWorktree } from './git-worktree.ts';
-import { StateStore, consumedAttempts, type FactoryRunState } from './state-store.ts';
+import { StateStore, consumedAttempts, type FactoryRunState, type TaskState } from './state-store.ts';
 import { Orchestrator, type PlannedTask, type TaskContext } from './orchestrator.ts';
 import { createAgentAdapters, requiredReviewerIds, type AgentModel, type SpecialistReviewers } from './agent-adapters.ts';
 import { createGitCheckpoint } from './git-checkpoint.ts';
@@ -288,7 +288,7 @@ async function executeRun(store:StateStore,state:FactoryRunState,config:Config):
   }
   console.log(`Run ${finished.runId}: ${finished.status}`);
   for(const task of Object.values(finished.tasks)) console.log(`${task.id}: ${task.status}${task.lastError?` (${task.lastError})`:''}`);
-  for(const task of Object.values(finished.tasks)) if(task.status==='blocked') console.log(nextStep(task.id,task.lastError));
+  for(const task of Object.values(finished.tasks)) if(task.status==='blocked') console.log(nextStep(task,finished.execution?.maxAttempts));
   if(finished.status!=='completed') process.exitCode=1;
 }
 async function integrateCommand(flags:Record<string,string|boolean>):Promise<void> {
@@ -337,7 +337,10 @@ async function integrateCommand(flags:Record<string,string|boolean>):Promise<voi
   } finally { await releaseRepository(); }
 }
 
-function nextStep(taskId:string,lastError=''):string {
+function nextStep(task:TaskState,maxAttempts?:number):string {
+  const taskId=task.id, lastError=task.lastError??'';
+  // resume refuses a task whose budget is spent; only a replacement task gets a new budget.
+  if (maxAttempts!==undefined && consumedAttempts(task)>=maxAttempts) return `${taskId}: retry budget exhausted; resume cannot retry it. Inspect the failures, then replace the task with replan and amend --approve (clean its leftover edits from the worktree first), or start a new run.`;
   if (lastError.includes('task_too_large:')) return `${taskId}: split it with replan, review the revised plan, then amend --approve and resume --approve.`;
   if (lastError.includes('decision_needed:')) return `${taskId}: answer in a file, then resume --retry-task ${taskId} --guidance FILE --approve.`;
   return `${taskId}: inspect the worktree, fix the cause, then resume --retry-task ${taskId} --approve.`;
@@ -349,7 +352,7 @@ async function statusCommand(flags:Record<string,string|boolean>):Promise<void> 
   if (state.git) console.log(`Branch: ${state.git.runBranch}; target: ${state.git.targetBranch}; worktree: ${state.git.worktree}; checkpoint: ${state.git.expectedHead}`);
   for (const integration of state.integrations ?? []) console.log(`Integration ${integration.number}: ${integration.status}; candidate: ${integration.commit ?? 'none'}; worktree: ${integration.worktree}`);
   for(const task of Object.values(state.tasks)) console.log(`${task.id}: ${task.status}, attempts=${task.attempts.length} (budget used ${consumedAttempts(task)}/${state.execution?.maxAttempts??'?'})${task.lastError?` — ${task.lastError}`:''}`);
-  for(const task of Object.values(state.tasks)) if(task.status==='blocked') console.log(nextStep(task.id,task.lastError));
+  for(const task of Object.values(state.tasks)) if(task.status==='blocked') console.log(nextStep(task,state.execution?.maxAttempts));
   for(const entry of state.supersededTasks ?? []) console.log(`${entry.task.id}: superseded by plan amendment, attempts=${entry.task.attempts.length}`);
 }
 async function main():Promise<void> {
