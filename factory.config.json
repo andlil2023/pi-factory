@@ -33,10 +33,26 @@
     "maxAttempts": 3,
     "requireApprovalBeforeExecution": true
   },
+  "setup": [
+    {
+      "executable": "cmd",
+      "args": [
+        "/c",
+        "npm",
+        "ci",
+        "--ignore-scripts",
+        "--no-audit",
+        "--no-fund"
+      ],
+      "timeoutMs": 600000
+    }
+  ],
   "verification": [
     {
       "executable": "node",
-      "args": [ "--test" ],
+      "args": [
+        "--test"
+      ],
       "timeoutMs": 120000
     }
   ]

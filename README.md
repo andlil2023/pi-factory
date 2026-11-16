@@ -88,6 +88,18 @@ npm run factory -- resume --repo PATH --run RUN_ID --config CONFIG_FILE --approv
 
 **Objectives.** State a threat model and non-goals in the objective (see `examples/objective.md`). The planner must not assume an adversary that the objective does not name, and reviewers may block only on stated requirements or concrete defects.
 
+## Worktree setup
+
+A fresh run or integration worktree contains only tracked files: no `node_modules` or other ignored build inputs. Configure trusted `setup` commands to prepare it. They run once after each run worktree and each integration worktree is created, before any agent or verification:
+
+```json
+"setup": [
+  { "executable": "cmd", "args": ["/c", "npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund"], "timeoutMs": 600000 }
+]
+```
+
+On Linux and macOS use `"executable": "npm"` with the same arguments after `/c`. Commands run without a shell, so `npm` on Windows needs `cmd /c`. A failed setup stops `run` before any run state exists and blocks an integration attempt. Setup output must be Git-ignored; a setup that dirties tracked files is rejected by the existing clean-worktree checks. `setup` is part of the configuration fingerprint, so it cannot be added to an existing run. `resume` does not rerun setup.
+
 ## Approval-gated integration
 
 Integration has two separately approved stages, using the same configuration as the completed run:

@@ -1,16 +1,55 @@
 {
   "agents": {
-    "planner": { "provider": "openai", "model": "REPLACE_WITH_PI_MODEL_ID" },
-    "implementer": { "provider": "openai", "model": "REPLACE_WITH_PI_MODEL_ID" },
-    "reviewer": { "provider": "openai", "model": "REPLACE_WITH_PI_MODEL_ID" }
+    "planner": {
+      "provider": "openai",
+      "model": "REPLACE_WITH_PI_MODEL_ID"
+    },
+    "implementer": {
+      "provider": "openai",
+      "model": "REPLACE_WITH_PI_MODEL_ID"
+    },
+    "reviewer": {
+      "provider": "openai",
+      "model": "REPLACE_WITH_PI_MODEL_ID"
+    }
   },
   "reviewRouting": "task-specific",
   "reviewers": {
-    "security": { "provider": "openai", "model": "REPLACE_WITH_PI_MODEL_ID", "timeoutMs": 300000 },
-    "ui": { "provider": "openai", "model": "REPLACE_WITH_PI_MODEL_ID", "timeoutMs": 300000 }
+    "security": {
+      "provider": "openai",
+      "model": "REPLACE_WITH_PI_MODEL_ID",
+      "timeoutMs": 300000
+    },
+    "ui": {
+      "provider": "openai",
+      "model": "REPLACE_WITH_PI_MODEL_ID",
+      "timeoutMs": 300000
+    }
   },
-  "execution": { "maxAttempts": 3 },
+  "execution": {
+    "maxAttempts": 3
+  },
+  "setup": [
+    {
+      "executable": "cmd",
+      "args": [
+        "/c",
+        "npm",
+        "ci",
+        "--ignore-scripts",
+        "--no-audit",
+        "--no-fund"
+      ],
+      "timeoutMs": 600000
+    }
+  ],
   "verification": [
-    { "executable": "node", "args": ["--test"], "timeoutMs": 120000 }
+    {
+      "executable": "node",
+      "args": [
+        "--test"
+      ],
+      "timeoutMs": 120000
+    }
   ]
 }

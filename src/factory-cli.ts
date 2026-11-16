@@ -24,6 +24,8 @@ interface Config {
   uiEvidence?: { command: UiEvidenceCommand };
   execution?: { maxAttempts?: number };
   verification?: Array<{ executable: string; args?: string[]; timeoutMs?: number }>;
+  /** Trusted commands that prepare every fresh run or integration worktree, for example a dependency install. */
+  setup?: Array<{ executable: string; args?: string[]; timeoutMs?: number }>;
   pi?: { executable?: string; executableArgs?: string[] };
 }
 interface Plan { objective: string; assumptions: string[]; decisions: Array<{id:string;question:string;blocking:boolean;affectedTasks:string[]}>; tasks: PlannedTask[]; verification: string[] }
@@ -80,6 +82,9 @@ async function configFrom(flags:Record<string,string|boolean>):Promise<Config> {
     validateUiEvidenceCommand(config.uiEvidence.command);
   }
   if (config.reviewRouting !== undefined && config.reviewRouting !== 'all' && config.reviewRouting !== 'task-specific') throw new Error('Invalid reviewRouting; use all or task-specific');
+  if (config.setup !== undefined && (!Array.isArray(config.setup) || config.setup.some(command => !command || typeof command.executable !== 'string' || !command.executable.trim()
+    || (command.args !== undefined && (!Array.isArray(command.args) || command.args.some(arg => typeof arg !== 'string')))
+    || (command.timeoutMs !== undefined && (!Number.isSafeInteger(command.timeoutMs) || command.timeoutMs <= 0))))) throw new Error('Invalid setup; use an array of { executable, args?, timeoutMs? }');
   return config;
 }
 async function planCommand(flags:Record<string,string|boolean>):Promise<void> {
@@ -119,6 +124,14 @@ async function runVerificationCommand(cwd: string, command: {executable:string;a
   });
 }
 
+/** A fresh worktree has no ignored files such as node_modules; nothing else installs them before deterministic verification. */
+async function runSetup(worktree:string,config:Config):Promise<void> {
+  for (const command of config.setup ?? []) {
+    const outcome=await runVerificationCommand(worktree,{timeoutMs:600000,...command});
+    if (!outcome.passed) throw new Error(`Setup command failed in ${worktree}: ${outcome.command}\n${(outcome.stderr||outcome.stdout).slice(-2000)}`);
+  }
+}
+
 async function runCommand(flags:Record<string,string|boolean>):Promise<void> {
   if(flags.approve !== true) throw new Error('Execution requires --approve after reviewing the plan');
   const repository=resolve(required(flags,'repo'));
@@ -133,6 +146,8 @@ async function runCommand(flags:Record<string,string|boolean>):Promise<void> {
   // Worktree must be created before writing state into the source repository.
   const worktree=await createWorktree({repository,runId});
   console.log(`Created run worktree: ${worktree.path}`);
+  // Before any state exists: a failed setup leaves only the worktree and branch for inspection.
+  await runSetup(worktree.path,config);
   const git = await captureRunGitState(worktree);
   const store=new StateStore(repository);
   const release = await acquireRunLock(store.directory, runId);
@@ -302,6 +317,7 @@ async function integrateCommand(flags:Record<string,string|boolean>):Promise<voi
           scope:plan.value.tasks.map(task=>`${task.id}: ${task.scope}`).join('\n'),
           acceptanceCriteria:plan.value.tasks.flatMap(task=>task.acceptanceCriteria.map(criterion=>`${task.id}: ${criterion}`)),
           dependencies:[],verification:plan.value.verification},
+        setup:worktree=>runSetup(worktree,config),
         adapters:(worktree,baseline,attempt)=>createAgentAdapters({repository:worktree,factoryRoot:root,
           piExecutable:launch.executable,piExecutableArgs:launch.executableArgs,
           implementer:config.agents.implementer,reviewer:config.agents.reviewer,reviewers:config.reviewers,reviewRouting:config.reviewRouting,

@@ -18,6 +18,8 @@ export interface IntegrationOptions {
   enabledReviewers: string[];
   task: PlannedTask;
   adapters(worktree: string, baseline: string, attempt: number): OrchestratorAdapters;
+  /** Trusted, configured preparation of a fresh integration worktree (for example dependency install). Throws on failure. */
+  setup?(worktree: string): Promise<void>;
 }
 
 function eligible(state: FactoryRunState, options: IntegrationOptions): void {
@@ -98,6 +100,7 @@ export async function prepareIntegration(store: StateStore, state: FactoryRunSta
     await assertCandidate(state, record);
     const adapters = options.adapters(record.worktree, record.targetHead, number);
     const context = contextFor(state, record, options);
+    if (options.setup) await options.setup(record.worktree);
     record.verification = await adapters.verify(context);
     await store.save(state);
     if (!record.verification.passed) throw new Error('Integration verification failed');
