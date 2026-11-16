@@ -42,10 +42,16 @@ test('setup commands prepare the run worktree and each integration worktree befo
   const statePath = join(runs, (await readdir(runs)).find(file => file.endsWith('.json'))!);
   const completed = JSON.parse(await readFile(statePath, 'utf8')) as FactoryRunState;
   assert.equal(completed.status, 'completed');
-  const prepared = runCli('integrate', '--repo', repository, '--run', completed.runId, '--approve');
+  const guidancePath = join(repository, '.factory', 'integration-guidance.txt');
+  await writeFile(guidancePath, 'Approved evidence location: C:/evidence/report.json');
+  const invalid = runCli('integrate', '--repo', repository, '--run', completed.runId, '--approve', '--publish', '--candidate', 'unused', '--guidance', guidancePath);
+  assert.equal(invalid.status, 1);
+  assert.match(invalid.stderr, /--guidance is only valid/);
+  const prepared = runCli('integrate', '--repo', repository, '--run', completed.runId, '--approve', '--guidance', guidancePath);
   assert.equal(prepared.status, 0, prepared.stdout + prepared.stderr);
   const integration = (JSON.parse(await readFile(statePath, 'utf8')) as FactoryRunState).integrations!.at(-1)!;
   assert.equal(integration.status, 'ready');
+  assert.equal(integration.guidance, 'Approved evidence location: C:/evidence/report.json');
   assert.equal(await readFile(join(integration.worktree, 'installed.txt'), 'utf8'), 'ok');
 });
 

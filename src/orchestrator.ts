@@ -44,6 +44,14 @@ export interface TaskContext {
   previousFeedback: unknown[];
   /** Operator answers recorded on approved retries of this task; authoritative. */
   operatorGuidance?: string[];
+  /** Integration-only provenance. Historical checks and operator reports are not current candidate proof. */
+  integrationEvidence?: {
+    sourceRepository: string;
+    sourceWorktree: string;
+    taskGuidance: Array<{ taskId: string; approvedAt: string; text: string }>;
+    integrationGuidance: Array<{ attempt: number; approvedAt: string; text: string }>;
+    taskVerification: Array<{ taskId: string; attempt: number; checkpoint?: string; result: unknown }>;
+  };
   requiredReviewers?: string[];
   uiEvidence?: UiEvidenceRecord;
 }

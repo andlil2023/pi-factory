@@ -127,6 +127,18 @@ Preparation/publication use both the run lock and a repository-wide integration 
 
 **Not implemented:** automatic conflict resolution, adoption of manually resolved/amended candidates, remote push, automatic worktree cleanup, or adding tasks to a completed run. Conflicted candidates are preserved diagnostic workspaces in this version, not resumable implementation tasks. Publication refuses them; use a separately authorized resolution workflow and a fresh candidate (within budget), or perform manual integration outside the factory.
 
+### Supplying integration review context
+
+When inspection identifies missing decisions or evidence locations, provide an operator-authored file on preparation (or an explicitly approved fresh attempt):
+
+```powershell
+npm run factory -- integrate --repo PATH --run RUN_ID --config CONFIG_FILE --new-attempt --guidance FILE --approve
+```
+
+Omit `--new-attempt` for the first candidate. Guidance is limited to 20,000 characters, saved with the attempt before checks/review, and retained for later attempts. It cannot be added during `--publish`; changed context requires a fresh candidate and review within the original attempt budget. Do not include secrets. Use explicit absolute paths for relevant local artifacts: `.factory/` and other ignored files are not copied into integration worktrees. Paths are references, not snapshots; the factory does not copy, authenticate or refresh arbitrary external artifacts.
+
+All integration reviewers receive the saved plan, task-scoped operator guidance, integration guidance and historical task verification records with task/attempt/checkpoint provenance. Current candidate checks remain separate. Operator decisions establish scope, but reported experiments are not promoted to factory-executed checks. Historical results do not establish current candidate correctness. Reviewers inspect evidence and record limitations; they need not personally rerun the factory's independent checks. Missing essential evidence, unresolved blocking findings and failed checks still block. No new execution or network tools are granted to reviewers. For repeatable mandatory checks, configure trusted verification commands before starting a run; this feature does not change a completed run's pinned configuration.
+
 ## Specialist reviewers
 
 `factory.config.json` now enables Security and UI/accessibility review alongside the mandatory code review. Each reviewer runs in a fresh PI process with its own instructions, model, read-only tool selection, and validated report. These tool selections are not an OS security sandbox.
