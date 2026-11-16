@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { ContractValidator } from '../src/contract-validator.ts';
-import { collectUiEvidence, sourceFingerprint, assertUiEvidenceCurrent, validateUiEvidenceCommand } from '../src/ui-evidence.ts';
+import { collectUiEvidence, sourceFingerprint, assertUiEvidenceCurrent, validateUiEvidenceCommand, isUiEvidenceTimestampWithinCollection } from '../src/ui-evidence.ts';
 
 const validator = new ContractValidator(resolve('contracts'));
 async function fixture(t: import('node:test').TestContext) {
@@ -28,6 +28,19 @@ test('validates trusted command settings', () => {
   }
 });
 
+test('timestamp validation permits only the inclusive 50 ms cross-process margin', () => {
+  const started = Date.parse('2026-01-01T00:00:01.000Z');
+  const ended = started + 1000;
+  for (const [time, expected] of [
+    [started - 51, false], [started - 50, true], [started - 1, true],
+    [started, true], [ended, true], [ended + 1, true],
+    [ended + 50, true], [ended + 51, false]
+  ] as const) {
+    assert.equal(isUiEvidenceTimestampWithinCollection(new Date(time).toISOString(), started, ended), expected, String(time));
+  }
+  assert.equal(isUiEvidenceTimestampWithinCollection('invalid', started, ended), false);
+});
+
 test('collects task-bound desktop evidence and hashes real artifacts outside the worktree', async t => {
   const { repository, directory } = await fixture(t);
   const record = await collectUiEvidence(config(directory), { repository, taskId: 'T001', attempt: 2 }, validator);
@@ -46,7 +59,8 @@ test('collects task-bound desktop evidence and hashes real artifacts outside the
 for (const [mode, issue] of [
   ['nonzero', /collector command failed/], ['missing-manifest', /ENOENT/], ['malformed', /Invalid UI evidence manifest/],
   ['wrong-task', /task\/attempt mismatch/], ['wrong-attempt', /task\/attempt mismatch/],
-  ['stale', /timestamp/], ['fingerprint', /fingerprint mismatch/], ['failed-check', /failed checks/],
+  ['stale', /timestamp/], ['future', /timestamp/], ['invalid-timestamp', /timestamp/],
+  ['fingerprint', /fingerprint mismatch/], ['failed-check', /failed checks/],
   ['missing-check', /Missing accessibility check/], ['missing-artifact', /Missing accessibility-tree artifact/],
   ['missing-file', /ENOENT/], ['invalid-image', /PNG or JPEG/], ['traversal', /escapes/], ['absolute', /escapes/],
   ['symlink', /symlink escapes/], ['duplicate', /Duplicate/], ['source-mutation', /Source changed/]

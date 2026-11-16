@@ -31,7 +31,7 @@ Make sure build/test outputs such as `bin/` and `obj/` are Git-ignored. The coll
 
 Write `manifest.json` directly within the output directory. Artifact paths must be relative to that directory; absolute paths, traversal, and links to outside files are rejected. Screenshots must be PNG or JPEG. Artifacts must be nonempty regular files of at most 20 MiB each; the manifest is limited to 1 MB. Do not write credentials into checks, limitations, screenshots, trees, or logs.
 
-The factory creates the capture directory; do not reuse artifacts from earlier attempts. `capturedAt` must be an ISO timestamp generated during this invocation, such as `DateTimeOffset.UtcNow.ToString("O")`. Copy the provided task ID, attempt, and source fingerprint exactly.
+The factory creates the capture directory; do not reuse artifacts from earlier attempts. `capturedAt` must be an ISO timestamp generated during this invocation, such as `DateTimeOffset.UtcNow.ToString("O")`. To accommodate cross-process wall-clock discrepancies observed on Windows, validation allows an inclusive 50 ms margin before the recorded collection start and after its end. This tradeoff can admit timestamps just outside the actual recorded interval; timestamps beyond either margin are rejected. Copy the provided task ID, attempt, and source fingerprint exactly.
 
 ## Manifest shape
 
