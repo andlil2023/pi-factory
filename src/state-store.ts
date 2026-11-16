@@ -109,8 +109,10 @@ function validateState(value: unknown, expectedRunId: string): asserts value is 
 
 export class StateStore {
   readonly directory: string;
+  private readonly renameSnapshot: typeof rename;
 
-  constructor(repository: string) {
+  constructor(repository: string, renameSnapshot: typeof rename = rename) {
+    this.renameSnapshot = renameSnapshot;
     this.directory = join(resolve(repository), '.factory', 'runs');
   }
 
@@ -150,7 +152,16 @@ export class StateStore {
     await mkdir(dirname(path), { recursive: true });
     try {
       await writeFile(temporary, JSON.stringify(updated, null, 2) + '\n', { flag: 'wx' });
-      await rename(temporary, path);
+      for (let attempt = 1; ; attempt++) {
+        try {
+          await this.renameSnapshot(temporary, path);
+          break;
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException | null)?.code;
+          if (attempt >= 5 || (code !== 'EPERM' && code !== 'EBUSY' && code !== 'EACCES')) throw error;
+          await new Promise(resolve => setTimeout(resolve, attempt * 25));
+        }
+      }
     } finally {
       await rm(temporary, { force: true });
     }
