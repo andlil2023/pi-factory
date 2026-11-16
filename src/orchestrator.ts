@@ -2,7 +2,7 @@ import type { FactoryEventBus } from './event-bus.ts';
 import { appendReviewResult, reconcileReviewResults } from './review-results.ts';
 import type { ReviewSelection } from './review-routing.ts';
 import type { UiEvidenceRecord } from './ui-evidence.ts';
-import type { FactoryRunState, StateStore, AttemptRecord, ReviewVerdict } from './state-store.ts';
+import { consumedAttempts, type FactoryRunState, type StateStore, type AttemptRecord, type ReviewVerdict } from './state-store.ts';
 
 export interface PlannedTask {
   id: string;
@@ -13,10 +13,17 @@ export interface PlannedTask {
   dependencies: string[];
   verification: string[];
 }
+/** A reason the implementer cannot proceed. Remaining work is never a blocker. */
+export interface Blocker {
+  kind: 'decision_needed' | 'environment_missing' | 'task_too_large';
+  description: string;
+  question?: string;
+  proposedSplit?: string[];
+}
 export interface ImplementationResult {
   outcome: 'implemented' | 'blocked' | 'failed';
   report: unknown;
-  blockers?: string[];
+  blockers?: Blocker[];
 }
 export interface ReviewResult {
   reviewer: string;
@@ -34,6 +41,8 @@ export interface TaskContext {
   plan?: unknown;
   attempt: number;
   previousFeedback: unknown[];
+  /** Operator answers recorded on approved retries of this task; authoritative. */
+  operatorGuidance?: string[];
   requiredReviewers?: string[];
   uiEvidence?: UiEvidenceRecord;
 }
@@ -105,17 +114,18 @@ export class Orchestrator {
       if (!ready) { state.status = 'blocked'; await this.store.save(state); throw new Error('No ready tasks: cyclic dependencies or blocked prerequisites'); }
       const taskState = state.tasks[ready.id];
       this.options.events?.emit({type:'TASK_STARTED',taskId:ready.id});
-      while (taskState.attempts.length < maxAttempts && taskState.status !== 'completed' && taskState.status !== 'blocked') {
+      while (consumedAttempts(taskState) < maxAttempts && taskState.status !== 'completed' && taskState.status !== 'blocked') {
         const attempt: AttemptRecord = { number: taskState.attempts.length + 1, startedAt: new Date().toISOString() };
         taskState.attempts.push(attempt);
         taskState.status = 'running';
         await this.store.save(state);
         const feedback = taskState.attempts.slice(0, -1).flatMap(a => [
-          ...(a.outcome === 'blocked' || a.outcome === 'failed' || a.outcome === 'interrupted' ? [a.implementationReport] : []),
+          ...(a.outcome === 'blocked' || a.outcome === 'failed' || a.outcome === 'interrupted' || a.outcome === 'error' ? [a.implementationReport] : []),
           a.verification, ...(a.reviews ?? []).map(r => r.report),
           ...(a.uiEvidence && !a.uiEvidence.passed ? [a.uiEvidence] : [])
         ].filter(x => x !== undefined));
-        const context: TaskContext = { task: ready, plan: structuredClone(state.plan), attempt: attempt.number, previousFeedback: feedback };
+        const operatorGuidance = (state.resumptions ?? []).flatMap(r => r.retryTask === ready.id && r.guidance ? [r.guidance] : []);
+        const context: TaskContext = { task: ready, plan: structuredClone(state.plan), attempt: attempt.number, previousFeedback: feedback, ...(operatorGuidance.length ? { operatorGuidance } : {}) };
         if (attempt.number > 1) this.options.events?.emit({type:'REPAIR_STARTED',taskId:ready.id,attempt:attempt.number});
         try {
           this.options.events?.emit({type:'AGENT_STARTED',taskId:ready.id,agent:'implementer',attempt:attempt.number});
@@ -125,7 +135,7 @@ export class Orchestrator {
           attempt.outcome = implementation.outcome === 'implemented' ? 'implemented' : implementation.outcome;
           if (implementation.outcome === 'blocked') {
             taskState.status = 'blocked';
-            taskState.lastError = implementation.blockers?.join('; ') || 'Implementer blocked';
+            taskState.lastError = implementation.blockers?.map(b => `${b.kind}: ${b.question ?? b.description}`).join('; ') || 'Implementer blocked';
           } else if (implementation.outcome === 'failed') {
             taskState.status = 'repair_pending';
             taskState.lastError = 'Implementation failed';
@@ -198,7 +208,7 @@ export class Orchestrator {
           }
         } catch (error) {
           this.options.events?.emit({type:'AGENT_FAILED',taskId:ready.id,attempt:attempt.number,message:error instanceof Error?error.message:String(error)});
-          attempt.outcome = 'failed';
+          attempt.outcome = 'error';
           taskState.status = 'blocked';
           taskState.lastError = `Agent/verification error: ${error instanceof Error ? error.message : String(error)}; inspect worktree before retrying`;
         } finally {

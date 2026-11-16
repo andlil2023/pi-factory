@@ -4,7 +4,7 @@ import { lstat, realpath } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { WorktreeInfo } from './git-worktree.ts';
-import type { FactoryRunState, GitExecutionState, StateStore } from './state-store.ts';
+import { consumedAttempts, type FactoryRunState, type GitExecutionState, type StateStore } from './state-store.ts';
 
 const exec = promisify(execFile);
 async function git(cwd: string, args: string[]): Promise<string> {
@@ -102,8 +102,10 @@ export async function validateRunGitState(state: FactoryRunState, repository: st
   return { dirty, targetHead };
 }
 
+export const MAX_GUIDANCE_LENGTH = 20_000;
+
 /** Caller holds an exclusive run lock and has validated the persisted plan. */
-export async function prepareRunResume(store: StateStore, state: FactoryRunState, repository: string, fingerprint: string, maxAttempts: number, retryTask?: string): Promise<FactoryRunState> {
+export async function prepareRunResume(store: StateStore, state: FactoryRunState, repository: string, fingerprint: string, maxAttempts: number, retryTask?: string, guidance?: string): Promise<FactoryRunState> {
   if (!state.execution || !Number.isSafeInteger(state.execution.maxAttempts) || state.execution.maxAttempts < 1 || state.execution.configurationFingerprint !== fingerprint || state.execution.maxAttempts !== maxAttempts) throw new Error('Resume requires the original execution configuration and retry budget');
   if (state.status === 'completed') throw new Error('Run is already completed; integration is a separate operation');
   const active = Object.values(state.tasks).filter(task => task.status !== 'pending' && task.status !== 'completed');
@@ -111,16 +113,17 @@ export async function prepareRunResume(store: StateStore, state: FactoryRunState
   if (active.length && active[0].id !== retryTask) throw new Error(`Inspect the failed/interrupted task and explicitly pass --retry-task ${active[0].id}`);
   if (retryTask && (active.length !== 1 || active[0].id !== retryTask)) throw new Error('--retry-task must identify the existing failed/interrupted task');
   for (const task of Object.values(state.tasks)) {
-    if (task.attempts.some((attempt, index) => attempt.number !== index + 1) || task.attempts.length > maxAttempts || (task.status === 'pending' && task.attempts.length)) throw new Error('Invalid attempt history');
+    if (task.attempts.some((attempt, index) => attempt.number !== index + 1) || consumedAttempts(task) > maxAttempts || (task.status === 'pending' && task.attempts.length)) throw new Error('Invalid attempt history');
   }
-  if (active.length && active[0].attempts.length >= maxAttempts) throw new Error('Retry budget exhausted; resume cannot reset or increase it');
+  if (guidance !== undefined && (!retryTask || !guidance.trim() || guidance.length > MAX_GUIDANCE_LENGTH)) throw new Error(`Guidance requires --retry-task and 1-${MAX_GUIDANCE_LENGTH} characters`);
+  if (active.length && consumedAttempts(active[0]) >= maxAttempts) throw new Error('Retry budget exhausted; resume cannot reset or increase it');
   await validateRunGitState(state, repository, !!retryTask);
   const previousStatus = state.status;
   const recovered = await store.recover(state.runId);
   if (retryTask) recovered.tasks[retryTask].status = 'repair_pending';
   recovered.status = 'paused';
   recovered.resumptions ??= [];
-  recovered.resumptions.push({ approvedAt: new Date().toISOString(), previousStatus, ...(retryTask ? { retryTask } : {}) });
+  recovered.resumptions.push({ approvedAt: new Date().toISOString(), previousStatus, ...(retryTask ? { retryTask } : {}), ...(guidance !== undefined ? { guidance } : {}) });
   // A previous failed final verification is historical evidence, not current success.
   await store.save(recovered);
   return recovered;

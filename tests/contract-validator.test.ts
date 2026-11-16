@@ -80,7 +80,7 @@ test('accepts a valid implementation report', async () => {
   assert.equal(result.valid, true, JSON.stringify(result.issues));
 });
 test('rejects implemented report containing blockers', async () => {
-  await expectInvalid('implementation', { ...validImplementation(), blockers: ['Missing dependency'] }, 'semantic', 'cannot contain blockers');
+  await expectInvalid('implementation', { ...validImplementation(), blockers: [{ kind: 'environment_missing', description: 'Missing dependency' }] }, 'semantic', 'cannot contain blockers');
 });
 test('rejects blocked implementation without explanation', async () => {
   await expectInvalid('implementation', { ...validImplementation(), outcome: 'blocked' }, 'semantic', 'requires at least one blocker');

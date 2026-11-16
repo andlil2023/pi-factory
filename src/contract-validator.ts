@@ -22,6 +22,16 @@ const CONTRACTS: Record<ContractName, string> = {
   "ui-evidence": "ui-evidence.schema.json",
 };
 
+/** Task size gate for new and amended plans: one task must fit one implementer session. */
+export const MAX_ACCEPTANCE_CRITERIA = 5;
+export const MAX_CRITERION_LENGTH = 300;
+export interface ValidationOptions {
+  expectedTaskId?: string;
+  expectedReviewer?: string;
+  /** Enforce only when accepting a new or amended plan; persisted plans stay loadable. */
+  enforceTaskSize?: boolean;
+}
+
 export class ContractValidator {
   private readonly ajv = new Ajv2020({ allErrors: true, strict: true });
   private readonly validators = new Map<ContractName, ValidateFunction>();
@@ -35,7 +45,7 @@ export class ContractValidator {
   async validate<T = unknown>(
     contract: ContractName,
     input: string | unknown,
-    options: { expectedTaskId?: string; expectedReviewer?: string } = {},
+    options: ValidationOptions = {},
   ): Promise<ValidationResult<T>> {
     let value: unknown = input;
     if (typeof input === "string") {
@@ -76,16 +86,16 @@ export class ContractValidator {
   }
 }
 
-type Task = { id: string; dependencies: string[] };
+type Task = { id: string; dependencies: string[]; acceptanceCriteria: string[] };
 type Decision = { affectedTasks: string[] };
 type Plan = { tasks: Task[]; decisions: Decision[] };
-type Implementation = { taskId: string; outcome: string; blockers: string[] };
+type Implementation = { taskId: string; outcome: string; blockers: { kind: string; question?: string; proposedSplit?: string[] }[] };
 type Review = { taskId: string; reviewer: string; verdict: string; findings: { severity: string }[]; limitations: string[] };
 
 function validateSemantics(
   contract: ContractName,
   value: unknown,
-  options: { expectedTaskId?: string; expectedReviewer?: string },
+  options: ValidationOptions,
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const add = (path: string, message: string) => issues.push({ stage: "semantic", path, message });
@@ -120,8 +130,21 @@ function validateSemantics(
       visited.add(id);
     };
     for (const id of ids) visit(id);
+    if (options.enforceTaskSize) {
+      for (const [index, task] of plan.tasks.entries()) {
+        const path = `/tasks/${index}/acceptanceCriteria`;
+        if (task.acceptanceCriteria.length > MAX_ACCEPTANCE_CRITERIA) add(path, `${task.id} has ${task.acceptanceCriteria.length} acceptance criteria; the limit is ${MAX_ACCEPTANCE_CRITERIA}. Split the task`);
+        for (const [criterion, text] of task.acceptanceCriteria.entries()) {
+          if (text.length > MAX_CRITERION_LENGTH) add(`${path}/${criterion}`, `Criterion has ${text.length} characters; the limit is ${MAX_CRITERION_LENGTH}. State one checkable behavior per criterion`);
+        }
+      }
+    }
   } else if (contract === "implementation") {
     const report = value as Implementation;
+    for (const [index, blocker] of report.blockers.entries()) {
+      if (blocker.kind === "decision_needed" && !blocker.question) add(`/blockers/${index}`, "A decision_needed blocker requires a question");
+      if (blocker.kind === "task_too_large" && (blocker.proposedSplit?.length ?? 0) < 2) add(`/blockers/${index}`, "A task_too_large blocker requires a proposedSplit of at least two parts");
+    }
     if (report.outcome === "implemented" && report.blockers.length > 0) add("/blockers", "Implemented report cannot contain blockers");
     if (report.outcome === "blocked" && report.blockers.length === 0) add("/blockers", "Blocked report requires at least one blocker");
   } else if (contract === "review") {

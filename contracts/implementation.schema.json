@@ -66,8 +66,36 @@
     "blockers": {
       "type": "array",
       "items": {
-        "type": "string",
-        "minLength": 1
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "description"
+        ],
+        "properties": {
+          "kind": {
+            "enum": [
+              "decision_needed",
+              "environment_missing",
+              "task_too_large"
+            ]
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1
+          },
+          "question": {
+            "type": "string",
+            "minLength": 1
+          },
+          "proposedSplit": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
       }
     }
   }

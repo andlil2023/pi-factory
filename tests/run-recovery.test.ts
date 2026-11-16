@@ -208,3 +208,16 @@ test('legacy runs and completed runs are not silently reactivated', async t => {
   state.git = undefined;
   await assert.rejects(validateRunGitState(state, repository), /legacy runs/);
 });
+
+test('blocked, interrupted and error attempts do not exhaust the budget; guidance is recorded with the approval', async t => {
+  const { repository, store, state } = await fixture(t);
+  state.tasks.T001.status = 'blocked';
+  state.tasks.T001.attempts = (['blocked', 'error', 'interrupted', 'blocked'] as const).map((outcome, index) => ({ number: index + 1, startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), outcome }));
+  await store.save(state);
+  await assert.rejects(prepareRunResume(store, state, repository, fingerprint, 3, 'T001', ' '), /Guidance requires/);
+  await assert.rejects(prepareRunResume(store, state, repository, fingerprint, 3, undefined, 'Use JSON.'), /Guidance requires|--retry-task/);
+  const resumed = await prepareRunResume(store, state, repository, fingerprint, 3, 'T001', 'Use JSON.');
+  assert.equal(resumed.tasks.T001.status, 'repair_pending');
+  assert.equal(resumed.tasks.T001.attempts.length, 4);
+  assert.deepEqual(resumed.resumptions?.map(r => r.guidance), ['Use JSON.']);
+});

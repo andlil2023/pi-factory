@@ -52,7 +52,9 @@ test('CLI resumes a blocked run in its original worktree with history, budgets, 
   assert.equal(implicitRetry.status, 1);
   assert.match(implicitRetry.stderr, /--retry-task T002/);
   assert.equal(await readFile(join(worktree, 'T002.txt'), 'utf8'), failedWork);
-  const resumed = runCli('resume', '--repo', repository, '--run', blocked.runId, '--retry-task', 'T002', '--approve');
+  const guidance = join(dir, 'guidance.txt');
+  await writeFile(guidance, 'Operator says proceed.');
+  const resumed = runCli('resume', '--repo', repository, '--run', blocked.runId, '--retry-task', 'T002', '--guidance', guidance, '--approve');
   assert.equal(resumed.status, 0, resumed.stdout + resumed.stderr);
   const completed = JSON.parse(await readFile(statePath, 'utf8')) as FactoryRunState;
   assert.equal(completed.status, 'completed');
@@ -62,6 +64,7 @@ test('CLI resumes a blocked run in its original worktree with history, budgets, 
   assert.equal(completed.tasks.T002.attempts[0].outcome, 'blocked');
   assert.equal(completed.tasks.T002.attempts.length, 2);
   assert.equal(completed.resumptions?.length, 1);
+  assert.equal(completed.resumptions![0].guidance, 'Operator says proceed.');
   assert.equal(completed.git?.expectedHead, completed.tasks.T002.checkpointCommit);
   assert.equal(completed.execution?.maxAttempts, 3);
   assert.equal(git('rev-parse', 'HEAD'), originalHead);

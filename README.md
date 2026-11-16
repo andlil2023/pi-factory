@@ -38,6 +38,36 @@ Run execution and resume use a local PID-based lock. A live owner is never displ
 
 Keep `.factory/` ignored in the target repository; it stores state, locks, events, and potentially sensitive evidence. Resume appends to the existing event log and records approval in state. Old runs without Git/execution metadata cannot be resumed automatically. A crash between creating a Git checkpoint and saving state intentionally causes a HEAD mismatch: preserve the work and reconcile manually; the factory never assumes an unrecorded commit was accepted. Existing runs must not be concurrently manipulated outside the factory.
 
+## Blocked tasks: answer, split, or fix
+
+An implementer may stop a task only with a typed blocker. Free-text blockers and "work remains" are rejected by `contracts/implementation.schema.json`. `status` prints the next step for each blocked task.
+
+| Blocker | Meaning | Operator action |
+| --- | --- | --- |
+| `decision_needed` | A specific question the plan does not answer | Answer it in a file, then `resume --retry-task T002 --guidance FILE --approve` |
+| `environment_missing` | A tool, platform, or credential is unavailable | Provide it, then `resume --retry-task T002 --approve` |
+| `task_too_large` | The task does not fit one session; includes a proposed split | Replan and amend, see below |
+
+Guidance is stored in run state with the approval and sent to the implementer and reviewers of that task as an authoritative answer. **Do not put secrets in a guidance file.**
+
+To split or revise a task without losing accepted work:
+
+```powershell
+# Read-only: the planner proposes a complete revised plan
+npm run factory -- replan --repo PATH --run RUN_ID --config CONFIG_FILE --output revised-plan.json [--guidance FILE]
+# Review revised-plan.json, then apply it and continue
+npm run factory -- amend --repo PATH --run RUN_ID --plan revised-plan.json --approve
+npm run factory -- resume --repo PATH --run RUN_ID --config CONFIG_FILE --approve
+```
+
+`amend` accepts a hand-edited plan too. Completed tasks must stay unchanged. A task with attempts is either kept unchanged or removed and replaced by tasks with new IDs; its attempt history moves to `supersededTasks` and the old plan to `planRevisions`. The factory never cleans the worktree: if the superseded task left edits, inspect and remove them yourself before `resume`.
+
+**Retry budget.** `execution.maxAttempts` counts attempts whose work was rejected by verification or review, or reported `failed`. Blocked reports, interruptions, and agent or infrastructure errors (recorded as outcome `error`) do not count: each of them already stops the run and needs an approved resume.
+
+**Task size gate.** `plan`, `run`, `replan`, and `amend` reject a task with more than 5 acceptance criteria or a criterion longer than 300 characters. Plans of existing runs stay loadable.
+
+**Objectives.** State a threat model and non-goals in the objective (see `examples/objective.md`). The planner must not assume an adversary that the objective does not name, and reviewers may block only on stated requirements or concrete defects.
+
 ## Approval-gated integration
 
 Integration has two separately approved stages, using the same configuration as the completed run:

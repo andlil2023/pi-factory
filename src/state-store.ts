@@ -5,7 +5,8 @@ import type { ReviewSelection } from './review-routing.ts';
 import type { UiEvidenceRecord } from './ui-evidence.ts';
 
 export type TaskStatus = 'pending' | 'running' | 'needs_review' | 'repair_pending' | 'completed' | 'blocked';
-export type AttemptOutcome = 'implemented' | 'failed' | 'blocked' | 'interrupted';
+/** `error` is an agent/infrastructure failure, as opposed to work the implementer reported as `failed`. */
+export type AttemptOutcome = 'implemented' | 'failed' | 'blocked' | 'interrupted' | 'error';
 export type ReviewVerdict = 'approved' | 'changes_requested' | 'blocked';
 
 export interface AttemptRecord {
@@ -74,9 +75,24 @@ export interface FactoryRunState {
   git?: GitExecutionState;
   execution?: ExecutionPolicy;
   integrations?: IntegrationAttempt[];
-  resumptions?: Array<{ approvedAt: string; previousStatus: FactoryRunState['status']; retryTask?: string }>;
+  /** `guidance` is the operator's answer to the retried task's blockers. */
+  resumptions?: Array<{ approvedAt: string; previousStatus: FactoryRunState['status']; retryTask?: string; guidance?: string }>;
+  /** Plans replaced by an approved amendment, oldest first. */
+  planRevisions?: Array<{ replacedAt: string; plan: unknown }>;
+  /** Tasks removed by an amendment; their attempt history is evidence. */
+  supersededTasks?: Array<{ supersededAt: string; task: TaskState }>;
   finalVerification?: { passed: boolean; details: unknown; checkedAt: string; head?: string };
   tasks: Record<string, TaskState>;
+}
+
+/**
+ * Attempts that count against the repair budget: finished work that was or could be rejected.
+ * Blocked reports, interruptions and errors always stop for the operator, so each
+ * further attempt already needs an approved resume.
+ */
+export function consumedAttempts(task: TaskState): number {
+  return task.attempts.filter(attempt => attempt.finishedAt !== undefined
+    && attempt.outcome !== 'blocked' && attempt.outcome !== 'interrupted' && attempt.outcome !== 'error').length;
 }
 
 function assertRunId(runId: string): void {

@@ -4,4 +4,6 @@ Review the assigned task, acceptance criteria, actual Git diff, relevant surroun
 
 Use `approved` only if no blocking defects were found and essential evidence is available. Use `changes_requested` with actionable blocking findings; use `blocked` if evidence or a necessary decision is missing. Review the entire task again after repairs, not only previous findings.
 
+A blocking finding must trace to the task's acceptance criteria, the plan's stated assumptions and decisions, operator guidance, or a concrete defect with evidence. Do not block on hardening against threats or loads that the objective and plan do not state; report those as `advisory` findings.
+
 Return ONLY a JSON object matching `contracts/review.schema.json`, without markdown fences or commentary.
