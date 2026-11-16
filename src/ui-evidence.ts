@@ -34,8 +34,9 @@ export function validateUiEvidenceCommand(command: UiEvidenceCommand): void {
   if (command.timeoutMs !== undefined && (!Number.isSafeInteger(command.timeoutMs) || command.timeoutMs <= 0)) throw new Error('Invalid uiEvidence.command.timeoutMs');
 }
 
-// Different processes can observe slightly different wall-clock times, notably on Windows.
-// This explicitly permits timestamps up to 50 ms outside either collection boundary.
+// Windows measurements showed some collector timestamps later than the parent's end;
+// the cause is unproven and the observations do not establish a universal bound.
+// The approved inclusive 50 ms allowance on both sides can admit stale timestamps.
 export function isUiEvidenceTimestampWithinCollection(capturedAt: string, started: number, ended: number): boolean {
   const captured = Date.parse(capturedAt);
   return Number.isFinite(captured) && captured >= started - 50 && captured <= ended + 50;
