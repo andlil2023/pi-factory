@@ -13,6 +13,26 @@ The CLI now creates `.factory/runs/<run-id>.events.jsonl` in the target reposito
 
 The event log is observational, not a source of truth for task status. The existing state store remains authoritative.
 
+## Read-only dashboard
+
+Start the dashboard separately from the factory (Node with `--experimental-strip-types` support is required):
+
+```sh
+node --experimental-strip-types src/dashboard-server.ts PATH_TO_TARGET_REPOSITORY [PORT]
+```
+
+The repository argument is required; the optional port defaults to 3000 and must be 1–65535. Open `http://127.0.0.1:3000/` (substitute the chosen port). The page refreshes persisted state every five seconds and offers a manual refresh. Running means the **last persisted state**, not proof that a process is still alive. Lifecycle events are observational snapshots and never change status. Missing, invalid, partial, or oversized state is shown as unavailable.
+
+To view fixture runs without starting agents, create a temporary target directory with `.factory/runs/demo.json` containing the following minimal state, then start the dashboard pointing at that directory:
+
+```json
+{"version":1,"runId":"demo","repository":"fixture","createdAt":"2025-01-01T00:00:00Z","updatedAt":"2025-01-01T00:00:00Z","status":"running","plan":{},"tasks":{}}
+```
+
+Optionally add `.factory/runs/demo.events.jsonl`, one JSON object per line, for example `{"runId":"demo","timestamp":"2025-01-01T00:00:00Z","type":"RUN_STARTED"}`. No configuration, agent, or factory execution is needed.
+
+**Threat model:** this is a read-only local viewer for a trusted operator on the same machine, not an authentication boundary or multi-user service. It binds only to IPv4 loopback, rejects unexpected Host and cross-origin Origin headers, uses a restrictive CSP, and does not expose control endpoints or CORS access. Projected run data can still contain sensitive text; any local user or process able to connect can read it. Do not expose the port through a proxy or use it to protect data from hostile local processes. Run-file text is untrusted and displayed as text; raw prompts, command output, configuration and UI evidence are excluded by the projection.
+
 ## Persisted Git state and resume
 
 Each new run records its worktree, run branch, target branch (the original repository's named branch at startup), base commit, and latest accepted checkpoint. It also pins the execution configuration fingerprint and retry budget. Tasks still execute sequentially in one worktree per run. **Completion does not merge the run branch into the target.**

@@ -1,0 +1,7 @@
+body { font: 1rem/1.5 system-ui, sans-serif; max-width: 70rem; margin: auto; padding: 1rem; color: #18212b; background: #fff; }
+section { border-top: 1px solid #718096; padding: 0.5rem 0; }
+button { font: inherit; cursor: pointer; }
+button:focus-visible { outline: 3px solid #005fcc; outline-offset: 2px; }
+li { margin: 0.35rem 0; overflow-wrap: anywhere; }
+dt { font-weight: bold; }
+dd { margin-bottom: 0.5rem; overflow-wrap: anywhere; }

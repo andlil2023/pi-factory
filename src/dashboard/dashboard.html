@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Factory dashboard</title>
+  <link rel="stylesheet" href="/dashboard.css">
+  <script src="/dashboard.js" defer></script>
+</head>
+<body>
+<main>
+  <h1>Factory dashboard</h1>
+  <p>Read-only. Persisted state is authoritative; lifecycle events are observational.</p>
+  <section aria-labelledby="runs-heading">
+    <h2 id="runs-heading">Runs</h2>
+    <button id="refresh" type="button">Refresh now</button>
+    <p id="list-status" role="status">Loading runs…</p>
+    <ul id="runs"></ul>
+  </section>
+  <section aria-labelledby="detail-heading">
+    <h2 id="detail-heading">Run details</h2>
+    <p id="detail-status" role="status">Select a run.</p>
+    <div id="details"></div>
+  </section>
+  <section aria-labelledby="timeline-heading">
+    <h2 id="timeline-heading">Lifecycle timeline</h2>
+    <p id="connection" role="status">Select a run to connect.</p>
+    <ol id="timeline"></ol>
+  </section>
+</main>
+</body>
+</html>

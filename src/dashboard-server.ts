@@ -1,5 +1,6 @@
 import { createServer, type ServerResponse } from 'node:http';
 import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { DashboardReader } from './dashboard-reader.ts';
 
@@ -31,8 +32,15 @@ export function createDashboardServer(repository: string) {
     catch { res.writeHead(400).end(); return; }
     const json = (value: unknown) => { res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' }).end(JSON.stringify(value)); };
     try {
-      if (pathname === '/') {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }).end('<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Factory dashboard</title></head><body><main><h1>Factory dashboard</h1></main></body></html>'); return;
+      const assets: Record<string, [string, string]> = {
+        '/': ['dashboard.html', 'text/html'],
+        '/dashboard.js': ['dashboard.js', 'text/javascript'],
+        '/dashboard.css': ['dashboard.css', 'text/css']
+      };
+      if (Object.hasOwn(assets, pathname)) {
+        const [file, type] = assets[pathname];
+        const content = await readFile(new URL(`./dashboard/${file}`, import.meta.url));
+        res.writeHead(200, { 'Content-Type': `${type}; charset=utf-8` }).end(content); return;
       }
       if (pathname === '/api/runs') { json(await reader.listRuns()); return; }
       const match = /^\/api\/runs\/([^/]+)(?:\/(events|live))?$/.exec(pathname);
