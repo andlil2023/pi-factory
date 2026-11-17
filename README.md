@@ -95,6 +95,14 @@ A fresh run or integration worktree contains only tracked files: no `node_module
 
 On Linux and macOS use `"executable": "npm"` with the same arguments after `/c`. Commands run without a shell, so `npm` on Windows needs `cmd /c`. A failed setup stops `run` before any run state exists and blocks an integration attempt. Setup output must be Git-ignored; a setup that dirties tracked files is rejected by the existing clean-worktree checks. `setup` is part of the configuration fingerprint, so it cannot be added to an existing run. `resume` does not rerun setup.
 
+## Implementer checks and factory verification
+
+For initial and repair attempts, implementers should run focused tests and type checks relevant to their changes, including regression tests for repair findings. When possible, they leave the configured full authoritative checks to independent factory verification rather than duplicating them. Repository instructions and explicit task or operator requirements take precedence and may require a full suite; broader testing, including a full suite, is also appropriate for investigation.
+
+Implementers must honestly report commands run, results and failures, checks not run, and limitations when full checks are deferred or required checks cannot run. An agent's claim, or a future factory check, is not a passed verification and does not replace factory verification. The factory independently runs deterministic task verification (full by default or selected as described below), followed by full final verification, integration preparation checks, and publication verification at their respective gates.
+
+Avoiding one duplicate full-suite run could save roughly seven minutes, based on recent runs as an illustrative baseline. Actual savings vary and are not guaranteed; model compliance with this guidance is not guaranteed either. No verification gate is waived by this guidance.
+
 ## Opt-in task verification selection
 
 By default, every task attempt runs the full configured `verification` array. To opt in, add `verificationSelection` to the operator-owned configuration used to start the run. [This example fragment](examples/verification-selection.example.json) shows the format; merge its top-level fields into a complete configuration, adapting the commands, paths and declarations to your repository. The example assumes hypothetical scripts and is not a safe configuration for this or any other repository without an independent audit.

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import type { ReviewRouting } from '../src/review-routing.ts';
 import type { UiEvidenceConfig } from '../src/ui-evidence.ts';
 import { tmpdir } from 'node:os';
@@ -76,6 +76,35 @@ test('production prompts include approved plan context without expanding the ass
     const { prompt } = JSON.parse((review.report as { summary: string }).summary) as { prompt: string };
     assert.ok(prompt.includes(JSON.stringify(plan)));
     assert.match(prompt, /review only the assigned task against its original acceptance criteria/);
+  }
+});
+
+test('initial and repair implementer requests carry development check guidance and obligations', async t => {
+  const repository = await mkdtemp(join(tmpdir(), 'factory-implementer-checks-'));
+  t.after(() => rm(repository, { recursive: true, force: true }));
+  await writeFile(join(repository, 'AGENTS.md'), 'REPOSITORY_FULL_SUITE_REQUIRED');
+  const adapters = createAgentAdapters({ repository, factoryRoot: resolve('.'),
+    piExecutable: process.execPath, piExecutableArgs: [resolve('tests/fixtures/fake-implementer.mjs')],
+    implementer: model, reviewer: model, verification: [], baselineCommit: 'HEAD' });
+  const task = { ...context.task, verification: ['TASK_FULL_SUITE_REQUIRED'] };
+  for (const attempt of [1, 2]) {
+    const feedback = attempt === 2 ? ['REPAIR_REGRESSION_FINDING'] : [];
+    const operatorGuidance = ['OPERATOR_FULL_SUITE_REQUIRED'];
+    const result = await adapters.implement({ ...context, task, attempt, previousFeedback: feedback, operatorGuidance });
+    const { args, prompt } = JSON.parse((result.report as { summary: string }).summary) as { args: string[]; prompt: string };
+    const instructions = await readFile(args[args.indexOf('--append-system-prompt') + 1], 'utf8');
+    assert.match(instructions, /initial and repair attempts/);
+    assert.match(instructions, /focused tests and type checks/);
+    assert.match(instructions, /reserve configured full authoritative checks for the factory/);
+    assert.match(instructions, /Repository instructions and explicit task or operator requirements take precedence/);
+    assert.match(instructions, /Broader testing, including a full suite, is also appropriate when needed for investigation/);
+    assert.match(instructions, /report that limitation/);
+    assert.match(instructions, /commands ran, their results and failures, and which tests or checks were not run/);
+    assert.match(instructions, /Do not claim that a future factory check has passed/);
+    assert.ok(prompt.includes(JSON.stringify(task)));
+    assert.ok(prompt.includes(JSON.stringify(feedback)));
+    assert.ok(prompt.includes(JSON.stringify(operatorGuidance)));
+    assert.equal(await readFile(join(repository, 'AGENTS.md'), 'utf8'), 'REPOSITORY_FULL_SUITE_REQUIRED');
   }
 });
 
