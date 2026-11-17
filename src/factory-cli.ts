@@ -19,6 +19,7 @@ import { captureRunGitState, configurationFingerprint, prepareRunResume, validat
 import { amendRunPlan } from './plan-amendment.ts';
 import { validateSelectionConfig, type SelectionConfig } from './selection-config.ts';
 import { DashboardReader } from './dashboard-reader.ts';
+import { diagnoseRepository } from './doctor-repository.ts';
 
 interface Config {
   agents: { planner: AgentModel; implementer: AgentModel; reviewer: AgentModel };
@@ -136,7 +137,11 @@ async function doctorCommand(flags:Record<string,string|boolean>):Promise<void> 
       if (unavailable) warnings.push(`${label}: a configured executable is not available locally; install it or check the configuration (it may be provided by setup).`);
     }
   }
-  console.log('Prerequisite and configuration diagnostics (read-only):');
+  if (flags.repo !== undefined) {
+    if (typeof flags.repo !== 'string' || !flags.repo.trim()) blockers.push('Repository: provide a Git working-tree root with --repo.');
+    else await diagnoseRepository(flags.repo, blockers, warnings);
+  }
+  console.log('Prerequisite, configuration and repository diagnostics (read-only):');
   console.log('Blockers:');
   if (blockers.length) for (const item of blockers) console.log(`- ${item}`); else console.log('- none');
   console.log('Warnings:');
@@ -462,7 +467,7 @@ async function main():Promise<void> {
   if(command==='replan') return replanCommand(flags);
   if(command==='amend') return amendCommand(flags);
   if(command==='integrate') return integrateCommand(flags);
-  console.log('Usage:\n  npm run factory -- doctor [--config FILE]\n  npm run factory -- run-list --repo PATH\n  npm run factory -- plan --repo PATH --objective FILE --output FILE\n  npm run factory -- run --repo PATH --plan FILE --approve\n  npm run factory -- status --repo PATH --run RUN_ID\n  npm run factory -- resume --repo PATH --run RUN_ID --approve [--retry-task TASK_ID [--guidance FILE]] [--recover-lock]\n  npm run factory -- replan --repo PATH --run RUN_ID --output FILE [--guidance FILE]\n  npm run factory -- amend --repo PATH --run RUN_ID --plan FILE --approve\n  npm run factory -- integrate --repo PATH --run RUN_ID --approve [--new-attempt] [--guidance FILE]\n  npm run factory -- integrate --repo PATH --run RUN_ID --publish --candidate SHA --approve');
+  console.log('Usage:\n  npm run factory -- doctor [--config FILE] [--repo PATH]\n  npm run factory -- run-list --repo PATH\n  npm run factory -- plan --repo PATH --objective FILE --output FILE\n  npm run factory -- run --repo PATH --plan FILE --approve\n  npm run factory -- status --repo PATH --run RUN_ID\n  npm run factory -- resume --repo PATH --run RUN_ID --approve [--retry-task TASK_ID [--guidance FILE]] [--recover-lock]\n  npm run factory -- replan --repo PATH --run RUN_ID --output FILE [--guidance FILE]\n  npm run factory -- amend --repo PATH --run RUN_ID --plan FILE --approve\n  npm run factory -- integrate --repo PATH --run RUN_ID --approve [--new-attempt] [--guidance FILE]\n  npm run factory -- integrate --repo PATH --run RUN_ID --publish --candidate SHA --approve');
   if(command) process.exitCode=1;
 }
 main().catch(e=>{console.error(e instanceof Error?e.stack:e);process.exitCode=1;});
