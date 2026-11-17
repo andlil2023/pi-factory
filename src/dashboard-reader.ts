@@ -35,11 +35,16 @@ function displayString(value: unknown, limit: number): string | undefined {
   if (!trimmed) return undefined;
   return trimmed.length > limit ? trimmed.slice(0, limit - 1) + '…' : trimmed;
 }
+function projectProgress(value: unknown) {
+  if (!object(value) || !['full', 'selected'].includes(String(value.mode)) || ![value.completed, value.total, value.failed].every(n => Number.isSafeInteger(n) && (n as number) >= 0)) return undefined;
+  return { mode: value.mode, completed: value.completed, total: value.total, failed: value.failed };
+}
 function projectTask(task: TaskState, title?: string) {
   return {
     id: task.id, title: title ?? task.id, status: task.status, budgetUsed: consumedAttempts(task), lastError: task.lastError,
     attempts: task.attempts.map(a => ({
       number: a.number, startedAt: a.startedAt, finishedAt: a.finishedAt, outcome: a.outcome,
+      phase: typeof a.phase === 'string' ? a.phase : undefined, verificationProgress: projectProgress(a.verificationProgress),
       verification: object(a.verification) && typeof a.verification.passed === 'boolean' ? { passed: a.verification.passed } : undefined,
       blockers: object(a.implementationReport) && Array.isArray(a.implementationReport.blockers) ? a.implementationReport.blockers.map((b: unknown) => {
         const projected = fields(b, ['kind', 'description', 'question']);
@@ -64,14 +69,25 @@ export function projectRun(state: FactoryRunState) {
       if (title && !titles.has(task.id)) titles.set(task.id, title);
     }
   }
+  const integrations = (Array.isArray(state.integrations) ? state.integrations : []).filter(object);
+  const latestIntegration = integrations.at(-1);
   return {
     runId: state.runId, label: displayString(label, 100) ?? state.runId, objectiveSummary: displayString(objective, 2000), createdAt: state.createdAt, updatedAt: state.updatedAt, status: state.status,
+    deliveryStatus: latestIntegration?.status === 'published' ? 'integrated'
+      : latestIntegration?.status === 'pr-opened' ? 'pr_opened'
+      : typeof latestIntegration?.status === 'string' ? 'integration_' + latestIntegration.status
+      : state.status === 'completed' ? 'awaiting_integration' : state.status,
     maxAttempts: Number.isSafeInteger(state.execution?.maxAttempts) ? state.execution?.maxAttempts : undefined,
     tasks: Object.values(state.tasks).map(task => projectTask(task, titles.get(task.id))),
     supersededTasks: (state.supersededTasks ?? []).map(entry => ({ supersededAt: entry.supersededAt, task: projectTask(entry.task) })),
+    finalVerificationProgress: projectProgress(state.finalVerificationProgress),
     finalVerification: state.finalVerification && typeof state.finalVerification.passed === 'boolean' ? { passed: state.finalVerification.passed, checkedAt: typeof state.finalVerification.checkedAt === 'string' ? state.finalVerification.checkedAt : undefined } : undefined,
-    integrations: (Array.isArray(state.integrations) ? state.integrations : []).filter(object).map(i => ({
+    integrations: integrations.map(i => ({
       number: Number.isSafeInteger(i.number) ? i.number : undefined, status: typeof i.status === 'string' ? i.status : undefined, error: typeof i.error === 'string' ? i.error : undefined,
+      phase: typeof i.phase === 'string' ? i.phase : undefined,
+      phaseUpdatedAt: typeof i.phaseUpdatedAt === 'string' ? i.phaseUpdatedAt : undefined,
+      verificationProgress: projectProgress(i.verificationProgress),
+      requiredReviewers: object(i.reviewSelection) && Array.isArray(i.reviewSelection.requiredReviewers) ? i.reviewSelection.requiredReviewers.filter(id => typeof id === 'string') : [],
       verification: object(i.verification) && typeof i.verification.passed === 'boolean' ? { passed: i.verification.passed } : undefined,
       publicationVerification: object(i.publicationVerification) && typeof i.publicationVerification.passed === 'boolean' ? { passed: i.publicationVerification.passed } : undefined,
       reviews: Array.isArray(i.reviews) ? i.reviews.filter(object).map(r => ({ reviewer: typeof r.reviewer === 'string' ? r.reviewer : undefined, verdict: typeof r.verdict === 'string' ? r.verdict : undefined, findings: object(r.report) && Array.isArray(r.report.findings) ? r.report.findings.map((f: unknown) => fields(f, ['severity', 'file', 'line', 'description', 'evidence', 'requiredAction'])) : [] })) : []

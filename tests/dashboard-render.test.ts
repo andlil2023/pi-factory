@@ -89,7 +89,7 @@ test('run details prioritize actionable cards, preserve expanded history and saf
             reviews: [{ reviewer: 'code', verdict: 'changes_requested', findings: [{ severity: 'high', file: 'src/main.ts', line: 12, description: 'Missing validation', requiredAction: 'Validate input' }] }] }
         ] }
       ],
-      integrations: [{ number: 1, status: 'blocked', error: 'Merge failed', verification: { passed: false } }],
+      integrations: [{ number: 1, status: 'blocked', phase: 'verifying', verificationProgress: {mode:'full',completed:1,total:3,failed:1}, requiredReviewers:['code'], error: 'Merge failed', verification: { passed: false } }],
       supersededTasks: [{ supersededAt: '2025-01-01', task: { id: 'old', status: 'pending', attempts: [] } }]
     }
   };
@@ -101,15 +101,26 @@ test('run details prioritize actionable cards, preserve expanded history and saf
   };
   runInNewContext(await readFile(new URL('../src/dashboard/dashboard.js', import.meta.url), 'utf8'), context);
   await new Promise(resolve => setImmediate(resolve));
+  context.showDetails({...entry, run:{...entry.run, tasks:[{id:'recovered',status:'blocked',attempts:[{number:1,startedAt:'2025-01-01',finishedAt:'2025-01-02',outcome:'interrupted',phase:'verifying'}]}]}});
+  assert.doesNotMatch(text(elements.details), /Current phase:/);
   context.showDetails(entry);
   const details = elements.details;
-  assert.match(text(details), /1\/2 Tasks completed/);
+  assert.match(text(details), /1\/2 Tasks accepted/);
   assert.match(text(details), /Build failed/);
   assert.match(text(details), /SQLite or Postgres/);
   assert.match(text(details), /src\/main.ts:12/);
   assert.match(text(details), /Validate input/);
   assert.match(text(details), /Final verification: not checked/);
   assert.match(text(details), /Merge failed/);
+  assert.match(text(details), /Phase: verifying/);
+  assert.match(text(details), /Verification commands: 1\/3 finished · full suite · 1 failed/);
+  assert.match(text(details), /code: pending/);
+  assert.match(text(details), /Accepted on run branch/);
+  context.showDetails({...entry, run:{...entry.run, status:'completed', deliveryStatus:'awaiting_integration'}});
+  assert.match(text(details), /Work verified · awaiting integration/);
+  context.showDetails({...entry, run:{...entry.run, deliveryStatus:'pr_opened'}});
+  assert.match(text(details), /PR opened · awaiting merge/);
+  context.showDetails(entry);
   assert.equal(details.querySelectorAll('article')[0].children[0].children[0].children[0].textContent, '<img src=x>');
   assert.equal(details.querySelectorAll('img').length, 0, 'untrusted values remain text');
   const history = details.querySelectorAll('details')[0];

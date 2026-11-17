@@ -29,6 +29,15 @@ function badge(value, text) {
     : ['paused', 'repair_pending', 'interrupted'].includes(value) ? 'warn' : 'neutral';
   return element;
 }
+function verificationProgress(parent, value) {
+  if (!value) return;
+  parent.append(node('p', `Verification commands: ${value.completed}/${value.total} finished · ${value.mode} suite · ${value.failed} failed`, 'task-meta'));
+}
+function deliveryLabel(run) {
+  const status = run.deliveryStatus;
+  return ({ awaiting_integration: 'Work verified · awaiting integration', integrated: 'Integrated into target', pr_opened: 'PR opened · awaiting merge' })[status]
+    || (status?.startsWith('integration_') ? `Integration: ${label(status.slice(12))}` : label(run.status));
+}
 function verification(value, title) {
   return badge(value ? (value.passed ? 'passed' : 'failed') : 'pending', `${title}: ${value ? (value.passed ? 'passed' : 'failed') : 'not checked'}`);
 }
@@ -61,11 +70,13 @@ function renderTask(task, maxAttempts, openKeys, key = task.id) {
   const heading = node('div', undefined, 'task-heading');
   const name = node('div', undefined, 'task-name');
   name.append(node('h3', task.title || task.id), node('p', task.id, 'display-id'));
-  heading.append(name, badge(task.status));
+  heading.append(name, badge(task.status, task.status === 'completed' ? 'Accepted on run branch' : label(task.status)));
   card.append(heading);
   const attempts = task.attempts || [];
   const latest = attempts[attempts.length - 1];
   card.append(node('p', `${task.budgetUsed ?? attempts.length}${maxAttempts !== undefined ? ` / ${maxAttempts}` : ''} attempts used${latest ? ` · Last activity ${age(latest.finishedAt || latest.startedAt)}` : ' · Not started'}`, 'task-meta'));
+  if (latest?.phase && !latest.finishedAt && latest.phase !== 'finished') card.append(node('p', `Current phase: ${label(latest.phase)}`, 'task-meta'));
+  verificationProgress(card, latest?.verificationProgress);
   if (latest) {
     const checks = node('div', undefined, 'checks');
     checks.append(verification(latest.verification, 'Verification'));
@@ -123,7 +134,7 @@ async function refresh() {
       button.setAttribute('aria-pressed', String(selected === entry.runId));
       button.append(node('span', entry.available && entry.run?.label || entry.runId, 'run-name'), node('span', entry.runId, 'display-id'));
       const meta = node('span', undefined, 'run-meta');
-      meta.append(badge(entry.available ? entry.run.status : 'unavailable'), node('span', entry.available ? age(entry.run.updatedAt) : 'Cannot read state'));
+      meta.append(badge(entry.available ? entry.run.status : 'unavailable', entry.available ? deliveryLabel(entry.run) : 'Unavailable'), node('span', entry.available ? age(entry.run.updatedAt) : 'Cannot read state'));
       button.append(meta);
       if (focusedRun !== undefined && focusedRun === entry.runId) focusTarget = button;
       button.addEventListener('click', () => selectRun(entry.runId));
@@ -157,9 +168,10 @@ function showDetails(entry) {
   if (run.objectiveSummary) {
     details.append(node('h3', 'Intended work', 'subheading'), node('p', run.objectiveSummary, 'objective-summary'));
   }
-  details.append(badge(run.status));
+  details.append(badge(run.status, deliveryLabel(run)));
+  details.append(node('p', 'Task acceptance is on the isolated run branch. Integration and publication are separate approved steps; an open PR is not a merge.', 'task-meta'));
   const stats = node('div', undefined, 'stats');
-  for (const [value, title] of [[`${completed}/${tasks.length}`, 'Tasks completed'], [active, 'Active / in review'], [blocked, 'Need attention'], [tasks.reduce((sum, task) => sum + (task.budgetUsed || 0), 0), 'Attempts used']]) {
+  for (const [value, title] of [[`${completed}/${tasks.length}`, 'Tasks accepted'], [active, 'Active / in review'], [blocked, 'Need attention'], [tasks.reduce((sum, task) => sum + (task.budgetUsed || 0), 0), 'Attempts used']]) {
     const stat = node('div', undefined, 'stat');
     stat.append(node('span', value, 'stat-value'), node('span', title, 'stat-label')); stats.append(stat);
   }
@@ -168,9 +180,10 @@ function showDetails(entry) {
   const fill = node('div', undefined, 'progress-fill');
   const percent = tasks.length ? Math.round(completed / tasks.length * 100) : 0;
   fill.style.width = `${percent}%`; progress.append(fill); details.append(progress);
-  details.append(node('p', `${percent}% complete · Created ${run.createdAt}`, 'task-meta'));
+  details.append(node('p', `${percent}% of tasks accepted · Created ${run.createdAt}`, 'task-meta'));
   const checks = node('div', undefined, 'checks');
   checks.append(verification(run.finalVerification, 'Final verification'));
+  verificationProgress(checks, run.finalVerificationProgress);
   if (run.finalVerification?.checkedAt) checks.append(node('span', run.finalVerification.checkedAt, 'task-meta'));
   details.append(checks);
   details.append(node('h3', 'Tasks', 'subheading'));
@@ -185,6 +198,11 @@ function showDetails(entry) {
     for (const integration of run.integrations) {
       const card = node('article', undefined, 'task-card');
       card.append(node('h3', `Integration ${integration.number ?? '—'}`), badge(integration.status));
+      if (integration.phase) card.append(node('p', `Phase: ${label(integration.phase)}${integration.phaseUpdatedAt ? ` · ${age(integration.phaseUpdatedAt)}` : ''}`, 'task-meta'));
+      verificationProgress(card, integration.verificationProgress);
+      for (const id of integration.requiredReviewers || []) {
+        if (!(integration.reviews || []).some(review => review.reviewer === id)) card.append(badge('pending', `${id}: pending`));
+      }
       const checks = node('div', undefined, 'checks');
       checks.append(verification(integration.verification, 'Verification'), verification(integration.publicationVerification, 'Publication verification'));
       card.append(checks);

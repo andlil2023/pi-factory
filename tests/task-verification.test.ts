@@ -35,13 +35,19 @@ test('attempt verification persists selected failure and cumulative repair evide
       return { outcome: 'implemented', report: { filesChanged: [] } };
     },
     selectReviewers: undefined,
-    review: async () => { gates.push('review'); return [{ reviewer: 'code', verdict: 'approved', report: {} }]; },
+    review: async () => {
+      const saved = (await store.load('selection-run')).tasks.T001.attempts.at(-1)!;
+      assert.equal(saved.phase, 'reviewing');
+      assert.deepEqual(saved.verificationProgress, {mode:'selected',completed:2,total:2,failed:0});
+      gates.push('review'); return [{ reviewer: 'code', verdict: 'approved', report: {} }]; },
     checkpoint: async () => { gates.push('checkpoint'); return {commit:'checkpoint'}; }
   }, {maxAttempts: 2}).execute(state, [task]);
   assert.equal(result.status, 'completed');
   const attempts = (await store.load('selection-run')).tasks.T001.attempts;
   const first = attempts[0].verification as {passed:boolean; details:unknown}; const second = attempts[1].verification as typeof first;
   assert.equal(first.passed, false); assert.equal(second.passed, true);
+  assert.equal(attempts[0].phase, 'finished');
+  assert.deepEqual(attempts[0].verificationProgress, {mode:'selected',completed:1,total:1,failed:1});
   const d1 = first.details as {mode:string; reasons:string[]; evidence:{changes:{path:string}[]}; checks:{passed:boolean}[]};
   const d2 = second.details as typeof d1;
   assert.equal(d1.mode, 'selected'); assert.ok(d1.reasons.length); assert.deepEqual(d1.evidence.changes.map(c=>c.path), ['a/one']);
