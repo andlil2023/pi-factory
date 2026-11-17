@@ -16,6 +16,7 @@ import { acquireRunLock } from './run-lock.ts';
 import { prepareIntegration, publishIntegration, publishPullRequest, hasGitRemote, type IntegrationOptions } from './git-integration.ts';
 import { captureRunGitState, configurationFingerprint, prepareRunResume, validateRunGitState, assertRunCheckpoint, MAX_GUIDANCE_LENGTH } from './run-recovery.ts';
 import { amendRunPlan } from './plan-amendment.ts';
+import { validateSelectionConfig, type SelectionConfig } from './selection-config.ts';
 
 interface Config {
   agents: { planner: AgentModel; implementer: AgentModel; reviewer: AgentModel };
@@ -24,6 +25,7 @@ interface Config {
   uiEvidence?: { command: UiEvidenceCommand };
   execution?: { maxAttempts?: number; maxInfraRetries?: number };
   verification?: Array<{ executable: string; args?: string[]; timeoutMs?: number }>;
+  verificationSelection?: SelectionConfig;
   /** Trusted commands that prepare every fresh run or integration worktree, for example a dependency install. */
   setup?: Array<{ executable: string; args?: string[]; timeoutMs?: number }>;
   pi?: { executable?: string; executableArgs?: string[] };
@@ -84,6 +86,7 @@ async function configFrom(flags:Record<string,string|boolean>):Promise<Config> {
     validateUiEvidenceCommand(config.uiEvidence.command);
   }
   if (config.reviewRouting !== undefined && config.reviewRouting !== 'all' && config.reviewRouting !== 'task-specific') throw new Error('Invalid reviewRouting; use all or task-specific');
+  if (config.verificationSelection !== undefined) validateSelectionConfig(config.verificationSelection, config.verification);
   if (config.setup !== undefined && (!Array.isArray(config.setup) || config.setup.some(command => !command || typeof command.executable !== 'string' || !command.executable.trim()
     || (command.args !== undefined && (!Array.isArray(command.args) || command.args.some(arg => typeof arg !== 'string')))
     || (command.timeoutMs !== undefined && (!Number.isSafeInteger(command.timeoutMs) || command.timeoutMs <= 0))))) throw new Error('Invalid setup; use an array of { executable, args?, timeoutMs? }');
@@ -244,7 +247,7 @@ async function executeRun(store:StateStore,state:FactoryRunState,config:Config):
   const adapterConfig = {repository:worktree.path,factoryRoot:root,
     piExecutable:launch.executable,piExecutableArgs:launch.executableArgs,
     implementer:config.agents.implementer,reviewer:config.agents.reviewer,reviewers:config.reviewers,reviewRouting:config.reviewRouting,
-    verification:config.verification!,baselineCommit:git.expectedHead,
+    verification:config.verification!,verificationSelection:config.verificationSelection,baselineCommit:git.expectedHead,
     uiEvidence:config.uiEvidence ? { command:config.uiEvidence.command, directory:join(store.directory,runId,'ui-evidence') } : undefined};
   const adapters=createAgentAdapters(adapterConfig);
   console.log(`Run ${runId}; worktree: ${worktree.path}`);
@@ -274,10 +277,9 @@ async function executeRun(store:StateStore,state:FactoryRunState,config:Config):
       for (const command of config.verification ?? []) {
         const outcome = await runVerificationCommand(worktree.path, command);
         details.push(outcome);
-        if (!outcome.passed) return {passed:false,details};
       }
       await assertRunCheckpoint(state);
-      return {passed:true,details};
+      return {passed:details.every(outcome => outcome.passed),details};
     }
   };
   const events=new FactoryEventBus({runId,logFile:join(repository,'.factory','runs',`${runId}.events.jsonl`)});
@@ -326,6 +328,7 @@ async function integrateCommand(flags:Record<string,string|boolean>):Promise<voi
         adapters:(worktree,baseline,attempt)=>createAgentAdapters({repository:worktree,factoryRoot:root,
           piExecutable:launch.executable,piExecutableArgs:launch.executableArgs,
           implementer:config.agents.implementer,reviewer:config.agents.reviewer,reviewers:config.reviewers,reviewRouting:config.reviewRouting,
+          // Integration preparation and publication must never use task-level selection.
           verification:config.verification!,baselineCommit:baseline,
           uiEvidence:config.uiEvidence?{command:config.uiEvidence.command,directory:join(store.directory,runId,'integration-evidence',String(attempt))}:undefined})
       };
