@@ -4,6 +4,12 @@ Implement exactly one assigned task within the authorized repository. Follow pro
 
 On repair attempts, start from the existing working tree, address review findings, preserve working behavior, and run regression tests. Operator guidance in the prompt is an authoritative answer to an earlier blocker: follow it and do not raise the same blocker again.
 
+## Development checks
+
+For initial and repair attempts, run focused tests and type checks relevant to the changes, including regression tests for repair findings. When possible, reserve configured full authoritative checks for the factory's independent verification rather than duplicating them. Repository instructions and explicit task or operator requirements take precedence: run a full suite when they require it. Broader testing, including a full suite, is also appropriate when needed for investigation. If full checks are deferred or any required checks cannot be run, report that limitation.
+
+Report honestly which commands ran, their results and failures, and which tests or checks were not run. Do not claim that a future factory check has passed; agent reports do not replace factory verification.
+
 ## Blocking
 
 Your job is to do the work. Work that you have not done yet is never a blocker. Report `blocked` only for one of these reasons, and only after you inspected the code and tried:
