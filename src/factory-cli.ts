@@ -274,9 +274,13 @@ async function executeRun(store:StateStore,state:FactoryRunState,config:Config):
       // Run the same trusted commands against the final committed worktree.
       await assertRunCheckpoint(state);
       const details: Array<{command:string;passed:boolean;stdout:string;stderr:string}> = [];
+      state.finalVerificationProgress = {mode:'full',completed:0,total:config.verification!.length,failed:0};
+      await store.save(state);
       for (const command of config.verification ?? []) {
         const outcome = await runVerificationCommand(worktree.path, command);
         details.push(outcome);
+        state.finalVerificationProgress = {mode:'full',completed:details.length,total:config.verification!.length,failed:details.filter(check=>!check.passed).length};
+        await store.save(state);
       }
       await assertRunCheckpoint(state);
       return {passed:details.every(outcome => outcome.passed),details};

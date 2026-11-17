@@ -3,7 +3,7 @@ import { AgentExecutionError } from './agent-error.ts';
 import { appendReviewResult, reconcileReviewResults } from './review-results.ts';
 import type { ReviewSelection } from './review-routing.ts';
 import type { UiEvidenceRecord } from './ui-evidence.ts';
-import { consumedAttempts, consumedInfraRetries, type FactoryRunState, type StateStore, type AttemptRecord, type ReviewVerdict } from './state-store.ts';
+import { consumedAttempts, consumedInfraRetries, type FactoryRunState, type StateStore, type AttemptRecord, type ReviewVerdict, type VerificationProgress } from './state-store.ts';
 
 export interface PlannedTask {
   id: string;
@@ -52,6 +52,7 @@ export interface TaskContext {
     integrationGuidance: Array<{ attempt: number; approvedAt: string; text: string }>;
     taskVerification: Array<{ taskId: string; attempt: number; checkpoint?: string; result: unknown }>;
   };
+  onVerificationProgress?(progress: VerificationProgress): Promise<void>;
   requiredReviewers?: string[];
   uiEvidence?: UiEvidenceRecord;
 }
@@ -126,7 +127,7 @@ export class Orchestrator {
       const taskState = state.tasks[ready.id];
       this.options.events?.emit({type:'TASK_STARTED',taskId:ready.id});
       while (consumedAttempts(taskState) < maxAttempts && taskState.status !== 'completed' && taskState.status !== 'blocked') {
-        const attempt: AttemptRecord = { number: taskState.attempts.length + 1, startedAt: new Date().toISOString() };
+        const attempt: AttemptRecord = { phase: 'implementing', number: taskState.attempts.length + 1, startedAt: new Date().toISOString() };
         taskState.attempts.push(attempt);
         taskState.status = 'running';
         await this.store.save(state);
@@ -138,6 +139,14 @@ export class Orchestrator {
         ].filter(x => x !== undefined));
         const operatorGuidance = (state.resumptions ?? []).flatMap(r => r.retryTask === ready.id && r.guidance ? [r.guidance] : []);
         const context: TaskContext = { task: ready, plan: structuredClone(state.plan), attempt: attempt.number, previousFeedback: feedback, ...(operatorGuidance.length ? { operatorGuidance } : {}) };
+        context.onVerificationProgress = async progress => {
+          attempt.verificationProgress = progress;
+          await this.store.save(state);
+        };
+        const phase = async (value: AttemptRecord['phase']) => {
+          attempt.phase = value;
+          await this.store.save(state);
+        };
         if (attempt.number > 1) this.options.events?.emit({type:'REPAIR_STARTED',taskId:ready.id,attempt:attempt.number});
         try {
           this.options.events?.emit({type:'AGENT_STARTED',taskId:ready.id,agent:'implementer',attempt:attempt.number});
@@ -152,6 +161,7 @@ export class Orchestrator {
             taskState.status = 'repair_pending';
             taskState.lastError = 'Implementation failed';
           } else {
+            await phase('verifying');
             const verification = await this.adapters.verify(context);
             attempt.verification = verification;
             this.options.events?.emit({type:verification.passed?'VERIFICATION_PASSED':'VERIFICATION_FAILED',taskId:ready.id,attempt:attempt.number});
@@ -159,6 +169,7 @@ export class Orchestrator {
               taskState.status = 'repair_pending';
               taskState.lastError = 'Deterministic verification failed';
             } else {
+              await phase('selecting_reviewers');
               const selection = this.adapters.selectReviewers
                 ? await this.adapters.selectReviewers(context)
                 : { requiredReviewers: [...requiredReviewers], changedFiles: [], reasons: ['Static required reviewers'] };
@@ -181,12 +192,14 @@ export class Orchestrator {
               taskState.status = 'needs_review';
               await this.store.save(state);
               if (reviewSelection.requiredReviewers.includes('ui') && this.adapters.collectUiEvidence) {
+                await phase('collecting_ui_evidence');
                 const uiEvidence = await this.adapters.collectUiEvidence(context);
                 attempt.uiEvidence = uiEvidence;
                 context.uiEvidence = uiEvidence;
                 await this.store.save(state);
                 if (!uiEvidence.passed) throw new Error(`UI evidence rejected: ${uiEvidence.issues.join('; ')}`);
               }
+              await phase('reviewing');
               this.options.events?.emit({type:'AGENT_STARTED',taskId:ready.id,agent:'reviewer',attempt:attempt.number});
               const reviews = await this.adapters.review(context, implementation, verification, async review => {
                 attempt.reviews ??= [];
@@ -206,6 +219,7 @@ export class Orchestrator {
                 taskState.lastError = 'Review requested changes';
               } else {
                 if (this.adapters.checkpoint) {
+                  await phase('checkpointing');
                   const result = await this.adapters.checkpoint(context);
                   if (!result.commit) throw new Error('Checkpoint did not return a commit SHA');
                   attempt.checkpointCommit = result.commit;
@@ -226,6 +240,7 @@ export class Orchestrator {
           taskState.status = retry ? 'repair_pending' : 'blocked';
           taskState.lastError = `Agent/verification error: ${error instanceof Error ? error.message : String(error)}; inspect worktree before retrying`;
         } finally {
+          attempt.phase = 'finished';
           attempt.finishedAt = new Date().toISOString();
           await this.store.save(state);
         }

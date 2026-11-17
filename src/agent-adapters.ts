@@ -132,7 +132,7 @@ export function createAgentAdapters(config: AgentAdapterConfig): OrchestratorAda
       if (!result.valid) throw new Error(`Invalid implementation report: ${JSON.stringify(result.issues)}`);
       return {outcome:result.value.outcome,report:result.value,blockers:result.value.blockers};
     },
-    async verify(_context:TaskContext):Promise<VerificationResult> {
+    async verify(context:TaskContext):Promise<VerificationResult> {
       if (!config.verification.length) return {passed:false,details:'No trusted verification commands configured'};
       let selection: VerificationSelection;
       try {
@@ -144,6 +144,11 @@ export function createAgentAdapters(config: AgentAdapterConfig): OrchestratorAda
           reasons: ['Selection failed; running full verification'] };
       }
       const checks: {command:string;passed:boolean;stdout:string;stderr:string}[] = [];
+      const progress = async () => context.onVerificationProgress?.({
+        mode: selection.mode, completed: checks.length, total: selection.commands.length,
+        failed: checks.filter(check => !check.passed).length
+      });
+      await progress();
       for (const check of selection.commands) {
         try {
           const {stdout,stderr} = await execFileAsync(check.executable,check.args ?? [],{
@@ -155,8 +160,9 @@ export function createAgentAdapters(config: AgentAdapterConfig): OrchestratorAda
           const e = error as Error & {stdout?:string;stderr?:string};
           checks.push({command:[check.executable,...(check.args??[])].join(' '),passed:false,stdout:String(e.stdout??'').slice(-8000),stderr:String(e.stderr??e.message).slice(-8000)});
         }
+        await progress();
       }
-      return {passed:checks.every(x=>x.passed),details:{...selection, checks}};
+      return {passed:checks.length > 0 && checks.every(x=>x.passed),details:{...selection, checks}};
     },
     async selectReviewers(context: TaskContext) {
       return selectTaskReviewers(context.task, await changedFiles(repository, config.baselineCommit), reviewerIds, config.reviewRouting);

@@ -41,6 +41,12 @@ test('dashboard reader projects state, isolates unavailable runs, and limits eve
     const projectedMalformed = await reader.readRun('malformed');
     assert.ok(projectedMalformed.available);
     assert.doesNotMatch(JSON.stringify(projectedMalformed), /SECRET_/);
+    for (const integrations of [[null], 'invalid', [{status:'published'}, null], [{status:'pr-opened'}]]) {
+      await writeFile(join(dir, 'optional.json'), JSON.stringify({...state, runId:'optional', status:'completed', integrations}));
+      const optional = await reader.readRun('optional'); assert.ok(optional.available);
+      assert.equal(optional.run.deliveryStatus, Array.isArray(integrations) && integrations.some(i => i?.status === 'published') ? 'integrated'
+        : Array.isArray(integrations) && integrations.some(i => i?.status === 'pr-opened') ? 'pr_opened' : 'awaiting_integration');
+    }
     const metadata = { ...state, runId: 'metadata', plan: { objective: `  \n ${'A'.repeat(101)} \n${'B'.repeat(2100)} `, tasks: [{ id: 'other', title: 'Wrong' }, { id: 'T001', title: ` ${'T'.repeat(201)} `, secret: 'SECRET_TITLE' }], secret: 'SECRET_PLAN' } };
     await writeFile(join(dir, 'metadata.json'), JSON.stringify(metadata));
     const projected = await reader.readRun('metadata'); assert.ok(projected.available);

@@ -54,7 +54,28 @@ async function fixture(t: import('node:test').TestContext, conflict = false) {
 
 test('preparation verifies and reviews a separate merge, publication needs its exact candidate', async t => {
   const { repository, info, store, state, options, counts } = await fixture(t);
+  const originalAdapters = options.adapters;
+  const observed: string[] = [];
+  const observe = async (expected: string) => {
+    assert.equal((await store.load(state.runId)).integrations!.at(-1)!.phase, expected);
+    observed.push(expected);
+  };
+  options.setup = async () => observe('setup');
+  options.adapters = (...args) => {
+    const adapters = originalAdapters(...args);
+    return {...adapters,
+      verify: async context => {
+        await observe(observed.includes('reviewing') ? 'publication_verifying' : 'verifying');
+        await context.onVerificationProgress?.({mode:'full',completed:0,total:2,failed:0});
+        assert.deepEqual((await store.load(state.runId)).integrations!.at(-1)!.verificationProgress, {mode:'full',completed:0,total:2,failed:0});
+        return adapters.verify(context);
+      },
+      review: async (...reviewArgs) => { await observe('reviewing'); return adapters.review(...reviewArgs); }
+    };
+  };
   const candidate = await prepareIntegration(store, state, options);
+  assert.equal(candidate.phase, 'awaiting_publication');
+  assert.deepEqual(observed, ['setup', 'verifying', 'reviewing']);
   assert.equal(candidate.status, 'ready', candidate.error);
   assert.equal(git(repository, 'rev-parse', 'HEAD'), info.baseCommit);
   assert.equal(git(info.path, 'rev-parse', 'HEAD'), state.git!.expectedHead);
@@ -63,6 +84,8 @@ test('preparation verifies and reviews a separate merge, publication needs its e
   assert.equal(candidate.status, 'ready');
   const published = await publishIntegration(store, state, options, candidate.commit!);
   assert.equal(published.status, 'published');
+  assert.equal(published.phase, 'published');
+  assert.equal(observed.at(-1), 'publication_verifying');
   assert.equal(git(repository, 'rev-parse', 'HEAD'), candidate.commit);
   assert.equal(git(repository, 'status', '--porcelain'), '');
   assert.deepEqual(counts(), { verified: 2, reviewed: 1 });

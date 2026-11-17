@@ -9,7 +9,16 @@ export type TaskStatus = 'pending' | 'running' | 'needs_review' | 'repair_pendin
 export type AttemptOutcome = 'implemented' | 'failed' | 'blocked' | 'interrupted' | 'error';
 export type ReviewVerdict = 'approved' | 'changes_requested' | 'blocked';
 
+export interface VerificationProgress {
+  mode: 'full' | 'selected';
+  completed: number;
+  total: number;
+  failed: number;
+}
+
 export interface AttemptRecord {
+  phase?: 'implementing' | 'verifying' | 'selecting_reviewers' | 'collecting_ui_evidence' | 'reviewing' | 'checkpointing' | 'finished';
+  verificationProgress?: VerificationProgress;
   number: number;
   startedAt: string;
   finishedAt?: string;
@@ -47,6 +56,9 @@ export interface ExecutionPolicy {
 }
 
 export interface IntegrationAttempt {
+  phase?: 'creating_worktree' | 'merging' | 'setup' | 'verifying' | 'selecting_reviewers' | 'collecting_ui_evidence' | 'reviewing' | 'checking_candidate' | 'awaiting_publication' | 'publication_verifying' | 'publishing' | 'published' | 'pr_opened' | 'stopped';
+  phaseUpdatedAt?: string;
+  verificationProgress?: VerificationProgress;
   /** Operator text approved at preparation; retained for later attempts, never automatic proof. */
   guidance?: string;
   number: number;
@@ -87,6 +99,7 @@ export interface FactoryRunState {
   planRevisions?: Array<{ replacedAt: string; plan: unknown }>;
   /** Tasks removed by an amendment; their attempt history is evidence. */
   supersededTasks?: Array<{ supersededAt: string; task: TaskState }>;
+  finalVerificationProgress?: VerificationProgress;
   finalVerification?: { passed: boolean; details: unknown; checkedAt: string; head?: string };
   tasks: Record<string, TaskState>;
 }

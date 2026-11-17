@@ -58,9 +58,18 @@ async function assertCandidate(state: FactoryRunState, record: IntegrationAttemp
   const parents = (await git(worktree, ['rev-list', '--parents', '-n', '1', record.commit])).split(' ');
   if (parents.length !== 3 || parents[1] !== record.targetHead || parents[2] !== record.sourceHead) throw new Error('Integration candidate does not merge the pinned target and source');
 }
-function contextFor(state: FactoryRunState, record: IntegrationAttempt, options: IntegrationOptions): TaskContext {
+async function setPhase(store: StateStore, state: FactoryRunState, record: IntegrationAttempt, phase: IntegrationAttempt['phase']): Promise<void> {
+  record.phase = phase;
+  record.phaseUpdatedAt = new Date().toISOString();
+  await store.save(state);
+}
+function contextFor(state: FactoryRunState, record: IntegrationAttempt, options: IntegrationOptions, store: StateStore): TaskContext {
   return {
     task: options.task, plan: structuredClone(state.plan), attempt: record.number,
+    onVerificationProgress: async progress => {
+      record.verificationProgress = progress;
+      await store.save(state);
+    },
     integrationEvidence: {
       sourceRepository: state.repository,
       sourceWorktree: state.git!.worktree,
@@ -95,7 +104,7 @@ export async function prepareIntegration(store: StateStore, state: FactoryRunSta
   if (included) throw new Error('Target already contains the run; no integration is needed');
   const number = previous.length + 1;
   const record: IntegrationAttempt = {
-    number, status: 'preparing', approvedAt: new Date().toISOString(),
+    number, status: 'preparing', phase: 'creating_worktree', phaseUpdatedAt: new Date().toISOString(), approvedAt: new Date().toISOString(),
     ...(options.guidance === undefined ? {} : { guidance: options.guidance.trim() }),
     worktree: join(dirname(await realpath(state.repository)), '.factory-integrations', state.runId, `attempt-${number}`),
     branch: `factory-integration/${state.runId}-${number}`, targetBranch: state.git!.targetBranch,
@@ -108,12 +117,14 @@ export async function prepareIntegration(store: StateStore, state: FactoryRunSta
     await mkdir(dirname(record.worktree), { recursive: true });
     await git(state.repository, ['worktree', 'add', '-b', record.branch, record.worktree, record.targetHead]);
     record.worktree = await realpath(record.worktree);
-    await store.save(state);
+    await setPhase(store, state, record, 'merging');
     try {
       await git(record.worktree, ['-c', 'user.name=PI Factory', '-c', 'user.email=pi-factory@localhost', 'merge', '--no-ff', '--no-edit', record.sourceHead]);
     } catch {
       record.conflicts = (await git(record.worktree, ['diff', '--name-only', '--diff-filter=U', '-z'])).split('\0').filter(Boolean);
       record.status = record.conflicts.length ? 'conflicted' : 'blocked';
+      record.phase = 'stopped';
+      record.phaseUpdatedAt = new Date().toISOString();
       record.error = record.conflicts.length ? 'Merge conflicts preserved for human inspection' : 'Git merge failed; integration worktree preserved for inspection';
       await store.save(state);
       return record;
@@ -121,12 +132,15 @@ export async function prepareIntegration(store: StateStore, state: FactoryRunSta
     record.commit = await git(record.worktree, ['rev-parse', 'HEAD']);
     await assertCandidate(state, record);
     const adapters = options.adapters(record.worktree, record.targetHead, number);
-    const context = contextFor(state, record, options);
+    const context = contextFor(state, record, options, store);
+    await setPhase(store, state, record, 'setup');
     if (options.setup) await options.setup(record.worktree);
+    await setPhase(store, state, record, 'verifying');
     record.verification = await adapters.verify(context);
     await store.save(state);
     if (!record.verification.passed) throw new Error('Integration verification failed');
     await assertCandidate(state, record);
+    await setPhase(store, state, record, 'selecting_reviewers');
     const selection = adapters.selectReviewers ? await adapters.selectReviewers(context) : { requiredReviewers: [...options.enabledReviewers], changedFiles: [], reasons: ['Static integration review requirements'] };
     const valid = (ids: string[]) => ids.includes('code') && new Set(ids).size === ids.length && ids.every(id => options.enabledReviewers.includes(id));
     if (!valid(selection.requiredReviewers)) throw new Error('Invalid integration reviewer selection');
@@ -136,11 +150,13 @@ export async function prepareIntegration(store: StateStore, state: FactoryRunSta
     context.requiredReviewers = [...record.reviewSelection.requiredReviewers];
     await store.save(state);
     if (context.requiredReviewers.includes('ui') && adapters.collectUiEvidence) {
+      await setPhase(store, state, record, 'collecting_ui_evidence');
       record.uiEvidence = await adapters.collectUiEvidence(context);
       context.uiEvidence = record.uiEvidence;
       await store.save(state);
       if (!record.uiEvidence.passed) throw new Error('Integration UI evidence failed');
     }
+    await setPhase(store, state, record, 'reviewing');
     const reviews = await adapters.review(context, { outcome: 'implemented', report: { summary: 'Deterministic integration candidate, not proof of correctness', source: record.sourceHead, target: record.targetHead, candidate: record.commit } }, record.verification, async review => {
       record.reviews ??= [];
       appendReviewResult(record.reviews, review, context.requiredReviewers!);
@@ -150,11 +166,15 @@ export async function prepareIntegration(store: StateStore, state: FactoryRunSta
     await store.save(state);
     const ids = new Set(record.reviews.map(review => review.reviewer));
     if (ids.size !== record.reviews.length || ids.size !== context.requiredReviewers.length || context.requiredReviewers.some(id => !ids.has(id)) || record.reviews.some(review => review.verdict !== 'approved')) throw new Error('Integration requires exact, unanimous reviewer approval');
+    await setPhase(store, state, record, 'checking_candidate');
     await assertCandidate(state, record);
     try { await assertPinnedRefs(state, record); }
     catch (error) { record.status = 'stale'; throw error; }
     record.status = 'ready';
+    await setPhase(store, state, record, 'awaiting_publication');
   } catch (error) {
+    record.phase = 'stopped';
+    record.phaseUpdatedAt = new Date().toISOString();
     if (record.status !== 'stale') record.status = 'blocked';
     record.error = error instanceof Error ? error.message.split('\n')[0] : 'Integration failed';
   }
@@ -176,7 +196,9 @@ async function publicationPreflight(store: StateStore, state: FactoryRunState, o
     if (!record.verification?.passed || !required?.includes('code') || new Set(required).size !== required.length || required.some(id => !options.enabledReviewers.includes(id)) || required.length !== ids.size || ids.size !== reviews.length || required.some(id => !ids.has(id)) || reviews.some(review => review.verdict !== 'approved')) throw new Error('Ready candidate lacks complete verification/review evidence');
     await assertCheckoutCheckpoint(state.repository, record.targetBranch, record.targetHead);
     const adapters = options.adapters(record.worktree, record.targetHead, record.number);
-    record.publicationVerification = await adapters.verify(contextFor(state, record, options));
+    delete record.verificationProgress;
+    await setPhase(store, state, record, 'publication_verifying');
+    record.publicationVerification = await adapters.verify(contextFor(state, record, options, store));
     await store.save(state);
     if (!record.publicationVerification.passed) throw new Error('Pre-publication verification failed');
     if (required.includes('ui') && adapters.collectUiEvidence) {
@@ -188,6 +210,8 @@ async function publicationPreflight(store: StateStore, state: FactoryRunState, o
     await assertCheckoutCheckpoint(state.repository, record.targetBranch, record.targetHead);
   } catch (error) {
     record.status = 'blocked';
+    record.phase = 'stopped';
+    record.phaseUpdatedAt = new Date().toISOString();
     record.error = error instanceof Error ? error.message.split('\n')[0] : 'Publication preflight failed';
     await store.save(state);
     throw error;
@@ -202,14 +226,14 @@ export async function publishIntegration(store: StateStore, state: FactoryRunSta
   if (await git(state.repository, ['remote'])) throw new Error('Local publication is disabled for repositories with configured remotes; use GitHub PR publication');
   record.status = 'publishing';
   record.publishApprovedAt = new Date().toISOString();
-  await store.save(state);
+  await setPhase(store, state, record, 'publishing');
   // From here on, failure is ambiguous and requires inspection, not automatic retry/rollback.
   try {
     await git(state.repository, ['merge', '--ff-only', '--no-edit', record.commit!]);
     await assertCheckoutCheckpoint(state.repository, record.targetBranch, record.commit!);
     record.status = 'published';
     record.publishedAt = new Date().toISOString();
-    await store.save(state);
+    await setPhase(store, state, record, 'published');
   } catch (error) {
     record.status = 'publishing';
     record.error = 'Publication needs manual reconciliation; inspect target HEAD and preserved evidence';
@@ -231,7 +255,7 @@ export async function publishPullRequest(store: StateStore, state: FactoryRunSta
   record.pullRequest = { ...destination };
   record.status = 'pr-publishing';
   record.publishApprovedAt = new Date().toISOString();
-  await store.save(state);
+  await setPhase(store, state, record, 'publishing');
   try {
     await api.pushCandidate(state.repository, destination);
     if (await api.remoteHead(state.repository, destination.pushUrl, destination.head) !== candidate) throw new Error('Remote candidate changed');
@@ -245,7 +269,7 @@ export async function publishPullRequest(store: StateStore, state: FactoryRunSta
     await api.verifyPullRequest(state.repository, destination, record.pullRequest.url);
     if (await api.remoteHead(state.repository, destination.pushUrl, destination.head) !== candidate || await api.remoteHead(state.repository, destination.pushUrl, destination.base) !== destination.baseSha) throw new Error('Remote refs changed after PR creation');
     record.status = 'pr-opened';
-    await store.save(state);
+    await setPhase(store, state, record, 'pr_opened');
     return record;
   } catch {
     record.status = 'pr-publishing';
