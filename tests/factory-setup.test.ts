@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { FactoryRunState } from '../src/state-store.ts';
+import { assertSubprocessStarted, subprocessDiagnostics } from './subprocess-diagnostics.ts';
 
 const cli = resolve('src/factory-cli.ts');
 const node = (script: string) => ({ executable: process.execPath, args: ['-e', script] });
@@ -30,7 +31,11 @@ async function fixture(t: import('node:test').TestContext, setup: unknown) {
   await writeFile(config, JSON.stringify({ agents: { planner: model, implementer: model, reviewer: model }, execution: { maxAttempts: 3 }, setup,
     verification: [node("process.exit(require('fs').existsSync('installed.txt')?0:1)")],
     pi: { executable: process.execPath, executableArgs: [resolve('tests/fixtures/fake-replan-agent.mjs')] } }));
-  const runCli = (...args: string[]) => spawnSync(process.execPath, ['--experimental-strip-types', cli, ...args, '--config', config], { encoding: 'utf8', timeout: 60_000 });
+  const runCli = (...args: string[]) => {
+    const result = spawnSync(process.execPath, ['--experimental-strip-types', cli, ...args, '--config', config], { encoding: 'utf8', timeout: 60_000 });
+    assertSubprocessStarted(result);
+    return result;
+  };
   const runs = join(repository, '.factory', 'runs');
   return { repository, plan, runCli, runs };
 }
@@ -38,17 +43,17 @@ async function fixture(t: import('node:test').TestContext, setup: unknown) {
 test('setup commands prepare the run worktree and each integration worktree before verification', async t => {
   const { repository, plan, runCli, runs } = await fixture(t, [node("require('fs').writeFileSync('installed.txt','ok')")]);
   const run = runCli('run', '--repo', repository, '--plan', plan, '--approve');
-  assert.equal(run.status, 0, run.stdout + run.stderr);
+  assert.equal(run.status, 0, subprocessDiagnostics(run));
   const statePath = join(runs, (await readdir(runs)).find(file => file.endsWith('.json'))!);
   const completed = JSON.parse(await readFile(statePath, 'utf8')) as FactoryRunState;
   assert.equal(completed.status, 'completed');
   const guidancePath = join(repository, '.factory', 'integration-guidance.txt');
   await writeFile(guidancePath, 'Approved evidence location: C:/evidence/report.json');
   const invalid = runCli('integrate', '--repo', repository, '--run', completed.runId, '--approve', '--publish', '--candidate', 'unused', '--guidance', guidancePath);
-  assert.equal(invalid.status, 1);
+  assert.equal(invalid.status, 1, subprocessDiagnostics(invalid));
   assert.match(invalid.stderr, /--guidance is only valid/);
   const prepared = runCli('integrate', '--repo', repository, '--run', completed.runId, '--approve', '--guidance', guidancePath);
-  assert.equal(prepared.status, 0, prepared.stdout + prepared.stderr);
+  assert.equal(prepared.status, 0, subprocessDiagnostics(prepared));
   const integration = (JSON.parse(await readFile(statePath, 'utf8')) as FactoryRunState).integrations!.at(-1)!;
   assert.equal(integration.status, 'ready');
   assert.equal(integration.guidance, 'Approved evidence location: C:/evidence/report.json');
@@ -58,7 +63,7 @@ test('setup commands prepare the run worktree and each integration worktree befo
 test('a failing setup command stops before any agent runs and names the command', async t => {
   const { repository, plan, runCli, runs } = await fixture(t, [node('process.exit(3)')]);
   const run = runCli('run', '--repo', repository, '--plan', plan, '--approve');
-  assert.equal(run.status, 1);
+  assert.equal(run.status, 1, subprocessDiagnostics(run));
   assert.match(run.stderr, /Setup command failed/);
   await assert.rejects(readdir(runs), 'No run state may exist when setup failed');
 });
@@ -66,6 +71,6 @@ test('a failing setup command stops before any agent runs and names the command'
 test('rejects a malformed setup configuration', async t => {
   const { repository, plan, runCli } = await fixture(t, [{ args: ['ci'] }]);
   const run = runCli('run', '--repo', repository, '--plan', plan, '--approve');
-  assert.equal(run.status, 1);
+  assert.equal(run.status, 1, subprocessDiagnostics(run));
   assert.match(run.stderr, /Invalid setup/);
 });
