@@ -151,12 +151,20 @@ async function refresh() {
 function showDetails(entry) {
   const details = $('details');
   const openKeys = new Set(Array.from(details.querySelectorAll('details[open]'), item => item.dataset.key));
+  const focusedDisclosure = Array.from(details.querySelectorAll('details')).find(item => item.firstElementChild === document.activeElement);
+  const focusedKey = focusedDisclosure?.dataset.key;
+  const restoreDisclosureFocus = () => {
+    if (focusedKey === undefined) return;
+    const target = Array.from(details.querySelectorAll('details')).find(item => item.dataset.key === focusedKey);
+    (target?.firstElementChild || $('refresh')).focus();
+  };
   details.replaceChildren();
   $('detail-heading').textContent = entry.available && entry.run?.label || entry.runId;
   details.append(node('p', entry.runId, 'display-id'));
   if (!entry.available) {
     $('detail-status').textContent = 'Run unavailable';
     details.append(node('div', 'This run’s persisted state is missing or unreadable. Try refreshing.', 'empty-state'));
+    restoreDisclosureFocus();
     return;
   }
   const run = entry.run;
@@ -217,6 +225,7 @@ function showDetails(entry) {
     }
     details.append(archived);
   }
+  restoreDisclosureFocus();
 }
 function selectRun(id) {
   selected = id; generation++;

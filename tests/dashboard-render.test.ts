@@ -4,7 +4,10 @@ import { readFile } from 'node:fs/promises';
 import { runInNewContext } from 'node:vm';
 
 class Element {
+  static active: Element | null = null;
   children: Element[] = [];
+  get firstElementChild() { return this.children[0] || null; }
+  focus() { Element.active = this; }
   dataset: Record<string, string> = {};
   style: Record<string, string> = {};
   attributes: Record<string, string> = {};
@@ -94,7 +97,7 @@ test('run details prioritize actionable cards, preserve expanded history and saf
     }
   };
   const context = {
-    document: { getElementById: (id: string) => elements[id], createElement: (tag: string) => new Element(tag), activeElement: null },
+    document: { getElementById: (id: string) => elements[id], createElement: (tag: string) => new Element(tag), get activeElement() { return Element.active; } },
     fetch: async (url: string) => ({ ok: true, json: async () => url === '/api/runs' ? [] : entry }),
     EventSource: Events, setInterval() {},
     showDetails: (_entry: unknown) => {}, selectRun: (_id: string) => {}
@@ -128,6 +131,18 @@ test('run details prioritize actionable cards, preserve expanded history and saf
   history.open = true;
   context.showDetails(entry);
   assert.equal(details.querySelectorAll('details')[0].open, true, 'polling preserves expanded history');
+  const summary = details.querySelectorAll('details')[0].firstElementChild!;
+  summary.focus();
+  context.showDetails(entry);
+  assert.notEqual(Element.active, summary);
+  assert.equal(Element.active, details.querySelectorAll('details')[0].firstElementChild, 'focus follows the matching disclosure');
+  assert.equal(details.querySelectorAll('details')[0].open, true);
+  context.showDetails({ ...entry, run: { ...entry.run, tasks: [] } });
+  assert.equal(Element.active, elements.refresh, 'removed disclosure falls back to refresh');
+  context.showDetails(entry);
+  details.querySelectorAll('details')[0].firstElementChild!.focus();
+  context.showDetails({ runId: 'sample', available: false });
+  assert.equal(Element.active, elements.refresh, 'unavailable run falls back to refresh');
   context.selectRun('sample');
   await new Promise(resolve => setImmediate(resolve));
   const events = [

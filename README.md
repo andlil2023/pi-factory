@@ -204,4 +204,4 @@ The factory creates a fresh artifact directory outside the target worktree, vali
 
 Without `uiEvidence`, existing source-only review behavior is unchanged: the reviewer must disclose missing evidence and block when acceptance criteria require rendered/interactive verification. A vision-capable UI model is needed for screenshot inspection. No collector is enabled by default because the factory has no target WPF app or GUI test harness.
 
-See [WPF UI evidence integration](examples/wpf-ui-evidence.md) and `contracts/ui-evidence.schema.json` for the collector contract and FlaUI guidance.
+See [dashboard browser evidence operation](docs/dashboard-browser-evidence.md) for this repository's scoped browser collector, [WPF UI evidence integration](examples/wpf-ui-evidence.md) for FlaUI guidance, and `contracts/ui-evidence.schema.json` for the collector contract.
