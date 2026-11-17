@@ -30,12 +30,12 @@ async function browserPath(): Promise<string> {
   throw new Error('No installed Chromium or Edge found; set FACTORY_BROWSER_EXECUTABLE to its executable');
 }
 
-class Cdp {
+export class Cdp {
   private socket: WebSocket;
   private next = 0;
   private pending = new Map<number, { resolve: (value: any) => void; reject: (error: Error) => void }>();
-  constructor(url: string) {
-    this.socket = new WebSocket(url);
+  constructor(url: string, createSocket: (url: string) => WebSocket = url => new WebSocket(url)) {
+    this.socket = createSocket(url);
     this.socket.addEventListener('message', event => {
       const data = JSON.parse(String(event.data));
       const pending = this.pending.get(data.id);
@@ -110,6 +110,7 @@ async function run(): Promise<void> {
   let executable: string, temp: string, server: ReturnType<typeof createDashboardServer>;
   const resources: OwnedResources = { server: { listening: false, closeAllConnections: () => {}, close: (() => {}) as never }, removeProfile: async () => { if (temp) await rm(temp, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } };
   let child: ChildProcess, cdp: Cdp, browserCdp: Cdp;
+  let collectedArtifacts: { kind: string; path: string }[] = [];
   await withOwnedResources(resources, async signal => {
     executable = await browserPath(); signal.throwIfAborted();
     // A late mkdtemp result must not leave an orphaned profile directory.
@@ -148,21 +149,82 @@ async function run(): Promise<void> {
       if (value.result?.value) { ready = true; break; } await sleep(100);
     }
     if (!ready) throw new Error('Synthetic dashboard run did not load');
-    await cdp.call('Runtime.evaluate', { expression: "document.querySelector('[data-run-id=synthetic]').click()" });
+    const evaluate = async (expression: string) => (await cdp.call('Runtime.evaluate', { expression, returnByValue: true })).result?.value;
+    const key = async (key: string, code: string, windowsVirtualKeyCode: number) => {
+      await cdp.call('Input.dispatchKeyEvent', { type: 'keyDown', key, code, windowsVirtualKeyCode });
+      await cdp.call('Input.dispatchKeyEvent', { type: 'char', key, code, text: '\r', windowsVirtualKeyCode });
+      await cdp.call('Input.dispatchKeyEvent', { type: 'keyUp', key, code, windowsVirtualKeyCode });
+    };
+    await evaluate("document.querySelector('[data-run-id=synthetic]').focus()");
+    await key('Enter', 'Enter', 13);
     let selected = false;
     for (let i = 0; i < 100; i++) {
-      const value = await cdp.call('Runtime.evaluate', { expression: "document.getElementById('detail-heading').textContent === 'Synthetic dashboard evidence' && document.getElementById('details').textContent.includes('Example task')", returnByValue: true });
+      const value = await cdp.call('Runtime.evaluate', { expression: "document.getElementById('detail-heading').textContent === 'Synthetic dashboard evidence' && ['Example task', 'Current phase: verification', 'Verification: passed', 'Verification commands: 1/2 finished'].every(s => document.getElementById('details').textContent.includes(s))", returnByValue: true });
       if (value.result?.value) { selected = true; break; } await sleep(100);
     }
     if (!selected) throw new Error('Synthetic run selection did not complete');
-    const tree = await cdp.call('Accessibility.getFullAXTree');
-    if (!Array.isArray(tree.nodes) || !tree.nodes.some((n: any) => n.role?.value === 'button' && n.name?.value)) throw new Error('Accessibility tree has no named button');
-    const screenshot = await cdp.call('Page.captureScreenshot', { format: 'png' });
-    signal.throwIfAborted();
-    await writeFile(join(output, 'desktop.png'), Buffer.from(screenshot.data, 'base64'), { signal }); signal.throwIfAborted();
-    await writeFile(join(output, 'accessibility.json'), JSON.stringify(tree, null, 2), { signal }); signal.throwIfAborted();
+    // Keyboard-operate the existing disclosure and refresh control.
+    await evaluate("document.querySelector('summary').focus()");
+    await key('Enter', 'Enter', 13);
+    if (!await evaluate("document.querySelector('details').open")) throw new Error('Keyboard disclosure failed');
+    // Attribute the request to the trusted keyboard click, not the automatic poll.
+    await evaluate(`(() => {
+      const button = document.getElementById('refresh');
+      const originalFetch = window.fetch;
+      window.__keyboardRefresh = { requests: 0, previousRun: document.querySelector('[data-run-id=synthetic]') };
+      let keyboardClick = false;
+      button.addEventListener('click', event => {
+        if (event.isTrusted && event.detail === 0) {
+          keyboardClick = true;
+          setTimeout(() => { keyboardClick = false; }, 0);
+        }
+      }, { capture: true, once: true });
+      window.fetch = function(input, init) {
+        if (keyboardClick && input === '/api/runs') window.__keyboardRefresh.requests++;
+        return originalFetch.call(this, input, init);
+      };
+      window.__restoreFetch = () => { window.fetch = originalFetch; };
+      button.focus();
+    })()`);
+    await key('Enter', 'Enter', 13);
+    let keyboardRefreshed = false;
+    for (let i = 0; i < 100; i++) {
+      if (await evaluate("window.__keyboardRefresh.requests === 1 && !window.__keyboardRefresh.previousRun.isConnected && document.querySelector('[data-run-id=synthetic]') !== null")) { keyboardRefreshed = true; break; }
+      await sleep(100);
+    }
+    await evaluate('window.__restoreFetch()');
+    if (!keyboardRefreshed) throw new Error('Keyboard refresh did not complete');
+    // Separately verify restoration of run-list focus after a manual refresh.
+    await evaluate("document.querySelector('[data-run-id=synthetic]').focus(); window.__previousRun = document.activeElement; document.getElementById('refresh').click()");
+    let restored = false;
+    for (let i = 0; i < 100; i++) {
+      if (await evaluate("document.activeElement !== window.__previousRun && document.activeElement?.dataset.runId === 'synthetic'")) { restored = true; break; }
+      await sleep(100);
+    }
+    if (!restored) throw new Error('Run focus was not restored after refresh');
+    await evaluate("document.querySelector('#details summary').focus(); window.__previousSummary = document.activeElement; document.getElementById('refresh').click()");
+    let disclosureRestored = false;
+    for (let i = 0; i < 100; i++) {
+      if (await evaluate("document.activeElement !== window.__previousSummary && document.activeElement === document.querySelector('#details summary') && document.activeElement.parentElement.open")) { disclosureRestored = true; break; }
+      await sleep(100);
+    }
+    if (!disclosureRestored) throw new Error('Disclosure focus and open state were not restored after refresh');
+    const artifacts: { kind: string; path: string }[] = [];
+    for (const width of [1440, 768, 390]) {
+      await cdp.call('Emulation.setDeviceMetricsOverride', { width, height: 900, deviceScaleFactor: 1, mobile: false });
+      await sleep(100);
+      if (!await evaluate('document.documentElement.scrollWidth <= document.documentElement.clientWidth')) throw new Error(`Horizontal overflow at ${width}px`);
+      const tree = await cdp.call('Accessibility.getFullAXTree');
+      if (!Array.isArray(tree.nodes) || !['Refresh now', 'Synthetic dashboard evidence'].every(name => tree.nodes.some((n: any) => n.role?.value === 'button' && n.name?.value?.includes(name)))) throw new Error(`Named controls missing at ${width}px`);
+      const screenshot = await cdp.call('Page.captureScreenshot', { format: 'png' });
+      signal.throwIfAborted();
+      await writeFile(join(output, `dashboard-${width}.png`), Buffer.from(screenshot.data, 'base64'), { signal });
+      await writeFile(join(output, `accessibility-${width}.json`), JSON.stringify(tree, null, 2), { signal });
+      artifacts.push({ kind: 'screenshot', path: `dashboard-${width}.png` }, { kind: 'accessibility-tree', path: `accessibility-${width}.json` });
+    }
+    collectedArtifacts = artifacts;
   });
-  await bounded(writeFile(join(output, 'manifest.json'), JSON.stringify({ version: 1, taskId, attempt, capturedAt: new Date().toISOString(), sourceFingerprint: fingerprint, application: { framework: 'dashboard HTML/JavaScript', buildId: fingerprint }, checks: [{ kind: 'interaction', name: 'Select synthetic run', status: 'passed' }, { kind: 'accessibility', name: 'Browser tree contains a named button', status: 'passed' }], artifacts: [{ kind: 'screenshot', path: 'desktop.png' }, { kind: 'accessibility-tree', path: 'accessibility.json' }], limitations: ['One desktop viewport and one selection; the accessibility tree check is not an accessibility audit or certification.'] }, null, 2), { signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())) }), Math.max(1, deadline - Date.now()), 'Manifest write');
+  await bounded(writeFile(join(output, 'manifest.json'), JSON.stringify({ version: 1, taskId, attempt, capturedAt: new Date().toISOString(), sourceFingerprint: fingerprint, application: { framework: 'dashboard HTML/JavaScript', buildId: fingerprint }, checks: [{ kind: 'interaction', name: 'Keyboard selection, disclosure, refresh and focus restoration; persisted task, check and phase', status: 'passed' }, { kind: 'accessibility', name: 'Named controls and no document overflow at 1440, 768 and 390 pixels', status: 'passed' }], artifacts: collectedArtifacts, limitations: ['Synthetic persisted run and selected keyboard interactions only; viewport and named-control checks are not a complete accessibility audit or certification.'] }, null, 2), { signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())) }), Math.max(1, deadline - Date.now()), 'Manifest write');
 }
 
 export function failCommand(): never {

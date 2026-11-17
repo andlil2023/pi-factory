@@ -13,6 +13,6 @@ test('real browser collector validates and leaves its owned resources closed', {
     const record = await collectUiEvidence({ directory, command: { executable: process.execPath, args: ['--experimental-strip-types', 'tests/browser-evidence/collect-dashboard.ts'], timeoutMs: 180000 } }, { repository, taskId: 'T001', attempt: 1 }, new ContractValidator(resolve('contracts')));
     assert.equal(record.passed, true, record.issues.join('\n'));
     await assertUiEvidenceCurrent(record, repository);
-    assert.equal(record.artifacts.length, 2);
+    assert.equal(record.artifacts.length, 6);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
