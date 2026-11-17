@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { FactoryRunState } from '../src/state-store.ts';
+import { assertSubprocessStarted, subprocessDiagnostics } from './subprocess-diagnostics.ts';
 
 for (const gate of ['final', 'preparation', 'publication'] as const) test(`${gate} runs all trusted checks despite task selection and blocks on failure`, async t => {
   const dir = await mkdtemp(join(tmpdir(), 'factory-full-gate-'));
@@ -25,10 +26,14 @@ for (const gate of ['final', 'preparation', 'publication'] as const) test(`${gat
     pi:{executable:process.execPath,executableArgs:[resolve('tests/fixtures/fake-factory-agent.mjs')]}}));
   const plan = join(dir,'plan.json');
   await writeFile(plan, JSON.stringify({objective:'Fixture',assumptions:[],decisions:[],tasks:[{id:'T001',title:'Fixture',objective:'Write file',scope:'T001.txt',acceptanceCriteria:['Exists'],dependencies:[],verification:['check']}],verification:['check']}));
-  const cli = (...args:string[]) => spawnSync(process.execPath,['--experimental-strip-types',resolve('src/factory-cli.ts'),...args,'--config',config],{encoding:'utf8',timeout:60000});
+  const cli = (...args:string[]) => {
+    const result = spawnSync(process.execPath,['--experimental-strip-types',resolve('src/factory-cli.ts'),...args,'--config',config],{encoding:'utf8',timeout:60000});
+    assertSubprocessStarted(result);
+    return result;
+  };
   if (gate === 'final') await writeFile(marker,'fail');
   const run = cli('run','--repo',repo,'--plan',plan,'--approve');
-  assert.equal(run.status, gate === 'final' ? 1 : 0, run.stdout + run.stderr);
+  assert.equal(run.status, gate === 'final' ? 1 : 0, subprocessDiagnostics(run));
   const runs = join(repo,'.factory','runs');
   const statePath = join(runs,(await readdir(runs)).find(f=>f.endsWith('.json'))!);
   const load = async () => JSON.parse(await readFile(statePath,'utf8')) as FactoryRunState;
@@ -43,7 +48,7 @@ for (const gate of ['final', 'preparation', 'publication'] as const) test(`${gat
   if (gate === 'preparation') await writeFile(marker,'fail');
   await writeFile(log,'');
   const prepared = cli('integrate','--repo',repo,'--run',state.runId,'--approve');
-  assert.equal(prepared.status, gate === 'preparation' ? 1 : 0, prepared.stdout + prepared.stderr);
+  assert.equal(prepared.status, gate === 'preparation' ? 1 : 0, subprocessDiagnostics(prepared));
   state = await load(); const candidate = state.integrations!.at(-1)!;
   assert.equal(await readFile(log,'utf8'),'0\n1\n2\n');
   if (gate === 'preparation') {
@@ -53,7 +58,7 @@ for (const gate of ['final', 'preparation', 'publication'] as const) test(`${gat
   assert.equal(candidate.status,'ready');
   await writeFile(marker,'fail'); await writeFile(log,'');
   const published = cli('integrate','--repo',repo,'--run',state.runId,'--publish','--candidate',candidate.commit!,'--approve');
-  assert.notEqual(published.status,0, published.stdout + published.stderr);
+  assert.notEqual(published.status,0, subprocessDiagnostics(published));
   state = await load();
   assert.equal(state.integrations!.at(-1)!.status,'blocked');
   assert.equal(state.integrations!.at(-1)!.publicationVerification?.passed,false);

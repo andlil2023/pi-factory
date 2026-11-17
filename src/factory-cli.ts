@@ -1,5 +1,6 @@
 import { FactoryEventBus } from './event-bus.ts';
-import { readFile, writeFile, mkdir, realpath } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, realpath, access, stat } from 'node:fs/promises';
+import { constants } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { runPi } from './pi-runner.ts';
@@ -17,6 +18,9 @@ import { prepareIntegration, publishIntegration, publishPullRequest, hasGitRemot
 import { captureRunGitState, configurationFingerprint, prepareRunResume, validateRunGitState, assertRunCheckpoint, MAX_GUIDANCE_LENGTH } from './run-recovery.ts';
 import { amendRunPlan } from './plan-amendment.ts';
 import { validateSelectionConfig, type SelectionConfig } from './selection-config.ts';
+import { DashboardReader } from './dashboard-reader.ts';
+import { diagnoseRepository } from './doctor-repository.ts';
+import { diagnoseRuns } from './doctor-runs.ts';
 
 interface Config {
   agents: { planner: AgentModel; implementer: AgentModel; reviewer: AgentModel };
@@ -91,6 +95,62 @@ async function configFrom(flags:Record<string,string|boolean>):Promise<Config> {
     || (command.args !== undefined && (!Array.isArray(command.args) || command.args.some(arg => typeof arg !== 'string')))
     || (command.timeoutMs !== undefined && (!Number.isSafeInteger(command.timeoutMs) || command.timeoutMs <= 0))))) throw new Error('Invalid setup; use an array of { executable, args?, timeoutMs? }');
   return config;
+}
+// Inspect executable files without launching configured commands or exposing their paths.
+async function executableAvailable(name:string):Promise<boolean> {
+  if (!name || name.includes('\0')) return false;
+  const paths = name.includes('/') || name.includes('\\') ? [resolve(name)] :
+    (process.env.PATH ?? '').split(process.platform === 'win32' ? ';' : ':').map(dir => resolve(dir || '.', name));
+  const extensions = process.platform === 'win32' && !/\.[^\\/]+$/.test(name)
+    ? (process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';') : [''];
+  for (const path of paths) for (const ext of extensions) {
+    try { const candidate=path+ext; if ((await stat(candidate)).isFile()) { await access(candidate, process.platform === 'win32' ? constants.F_OK : constants.X_OK); return true; } } catch { /* not available */ }
+  }
+  return false;
+}
+async function doctorCommand(flags:Record<string,string|boolean>):Promise<void> {
+  const blockers:string[]=[]; const warnings:string[]=[];
+  const [major,minor]=process.versions.node.split('.').map(Number);
+  if (major<22 || (major===22 && minor<6)) blockers.push('Node: install Node 22.6 or newer with TypeScript stripping support.');
+  if (!await executableAvailable('git')) blockers.push('Git: install Git and add it to PATH.');
+  let config:Config | undefined;
+  try { config=await configFrom(flags); } catch { blockers.push('Configuration: provide a readable, valid configuration with --config and check its required fields.'); }
+  if (config) {
+    try {
+      const launch=piLaunch(config);
+      let available=await executableAvailable(launch.executable);
+      if (!config.pi?.executable && process.platform==='win32') {
+        try { available=available && (await stat(launch.executableArgs[0])).isFile(); } catch { available=false; }
+      }
+      if (!available) blockers.push('Pi: install Pi or configure an available pi.executable.');
+    } catch { blockers.push('Pi: configure an available pi.executable.'); }
+    if (!config.verification?.length) blockers.push('Verification: configure at least one trusted verification command before running a plan.');
+    for (const [label,commands] of [['Setup',config.setup],['Verification',config.verification]] as const) {
+      if (!Array.isArray(commands)) { if (commands !== undefined) blockers.push(`${label}: configure an array of valid commands.`); continue; }
+      let invalid=false; let unavailable=false;
+      for (const command of commands) {
+        if (!command || typeof command.executable !== 'string' || !command.executable.trim() || (command.args !== undefined && (!Array.isArray(command.args) || command.args.some(arg=>typeof arg !== 'string'))) || (command.timeoutMs !== undefined && (!Number.isSafeInteger(command.timeoutMs) || command.timeoutMs<=0))) {
+          invalid=true; continue;
+        }
+        if (!await executableAvailable(command.executable)) unavailable=true;
+      }
+      if (invalid) blockers.push(`${label}: configure valid executable, args and timeout values.`);
+      if (unavailable) warnings.push(`${label}: a configured executable is not available locally; install it or check the configuration (it may be provided by setup).`);
+    }
+  }
+  if (flags.repo !== undefined) {
+    if (typeof flags.repo !== 'string' || !flags.repo.trim()) blockers.push('Repository: provide a Git working-tree root with --repo.');
+    else {
+      await diagnoseRepository(flags.repo, blockers, warnings);
+      await diagnoseRuns(flags.repo, warnings);
+    }
+  }
+  console.log('Prerequisite, configuration and repository diagnostics (read-only):');
+  console.log('Blockers:');
+  if (blockers.length) for (const item of blockers) console.log(`- ${item}`); else console.log('- none');
+  console.log('Warnings:');
+  if (warnings.length) for (const item of warnings) console.log(`- ${item}`); else console.log('- none');
+  if (blockers.length) process.exitCode=1;
 }
 async function planCommand(flags:Record<string,string|boolean>):Promise<void> {
   const repository=resolve(required(flags,'repo'));
@@ -374,16 +434,44 @@ async function statusCommand(flags:Record<string,string|boolean>):Promise<void> 
     console.log(`${entry.task.id}: superseded by plan amendment, attempts=${entry.task.attempts.length}${infraRetries ? `, infrastructure retries used=${infraRetries}` : ''}`);
   }
 }
+async function listCommand(flags:Record<string,string|boolean>):Promise<void> {
+  const entries=await new DashboardReader(resolve(required(flags,'repo'))).listRuns();
+  console.log('Persisted status only; running is not proof of process liveness.');
+  const topics: Array<[string, RegExp]> = [
+    ['testing', /\b(test|tests|testing|verification)\b/i],
+    ['documentation', /\b(documentation|docs|readme)\b/i],
+    ['security', /\b(security|secure|authentication)\b/i],
+    ['interface', /\b(ui|interface|dashboard)\b/i],
+    ['CLI', /\b(cli|command.line)\b/i],
+    ['repository', /\b(git|repository|worktree)\b/i]
+  ];
+  for (const entry of entries) {
+    const id=entry.runId;
+    if (!entry.available) { console.log(`${id}: unavailable`); continue; }
+    const run=entry.run;
+    const labels=topics.filter(([,pattern])=>pattern.test(run.objectiveSummary??'')).map(([label])=>label);
+    const activity=/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{3})?Z$/.test(run.updatedAt) ? run.updatedAt : 'unavailable';
+    const kinds=new Set<string>();
+    if (run.status==='blocked') for (const task of run.tasks) {
+      const attempt=task.attempts.at(-1);
+      if (task.status!=='blocked' || attempt?.outcome!=='blocked') continue;
+      for (const blocker of attempt.blockers) if (typeof blocker.kind==='string' && ['decision_needed','environment_missing','task_too_large'].includes(blocker.kind)) kinds.add(blocker.kind);
+    }
+    console.log(`${id}: inferred topics: ${labels.join(', ') || 'unavailable'}; persisted status: ${run.status}; last recorded activity: ${activity}; blocking reason: ${[...kinds].sort().join(', ') || 'unavailable'}`);
+  }
+}
 async function main():Promise<void> {
   const {command,flags}=argsMap(process.argv.slice(2));
+  if(command==='doctor') return doctorCommand(flags);
   if(command==='plan') return planCommand(flags);
   if(command==='run') return runCommand(flags);
   if(command==='status') return statusCommand(flags);
+  if(command==='run-list') return listCommand(flags);
   if(command==='resume') return resumeCommand(flags);
   if(command==='replan') return replanCommand(flags);
   if(command==='amend') return amendCommand(flags);
   if(command==='integrate') return integrateCommand(flags);
-  console.log('Usage:\n  npm run factory -- plan --repo PATH --objective FILE --output FILE\n  npm run factory -- run --repo PATH --plan FILE --approve\n  npm run factory -- status --repo PATH --run RUN_ID\n  npm run factory -- resume --repo PATH --run RUN_ID --approve [--retry-task TASK_ID [--guidance FILE]] [--recover-lock]\n  npm run factory -- replan --repo PATH --run RUN_ID --output FILE [--guidance FILE]\n  npm run factory -- amend --repo PATH --run RUN_ID --plan FILE --approve\n  npm run factory -- integrate --repo PATH --run RUN_ID --approve [--new-attempt] [--guidance FILE]\n  npm run factory -- integrate --repo PATH --run RUN_ID --publish --candidate SHA --approve');
+  console.log('Usage:\n  npm run factory -- doctor [--config FILE] [--repo PATH]\n  npm run factory -- run-list --repo PATH\n  npm run factory -- plan --repo PATH --objective FILE --output FILE\n  npm run factory -- run --repo PATH --plan FILE --approve\n  npm run factory -- status --repo PATH --run RUN_ID\n  npm run factory -- resume --repo PATH --run RUN_ID --approve [--retry-task TASK_ID [--guidance FILE]] [--recover-lock]\n  npm run factory -- replan --repo PATH --run RUN_ID --output FILE [--guidance FILE]\n  npm run factory -- amend --repo PATH --run RUN_ID --plan FILE --approve\n  npm run factory -- integrate --repo PATH --run RUN_ID --approve [--new-attempt] [--guidance FILE]\n  npm run factory -- integrate --repo PATH --run RUN_ID --publish --candidate SHA --approve');
   if(command) process.exitCode=1;
 }
 main().catch(e=>{console.error(e instanceof Error?e.stack:e);process.exitCode=1;});

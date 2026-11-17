@@ -1,17 +1,8 @@
-# PI Factory — Event Bus integration
+# PI Factory
 
-Copy `src/orchestrator.ts`, `src/factory-cli.ts`, and `tests/orchestrator-events.test.ts` into your existing PI Factory repository. The previously installed `src/event-bus.ts` is required but unchanged.
+PI Factory orchestrates planning, implementation, verification and independent review in isolated run worktrees, with explicit operator approval gates. The persisted state store is authoritative; lifecycle event logs are observational and do not stream individual Pi tokens or tool calls.
 
-Run:
-
-```powershell
-npm run check
-npm test
-```
-
-The CLI now creates `.factory/runs/<run-id>.events.jsonl` in the target repository and prints events while executing. The orchestrator emits lifecycle events for task execution, agent calls, verification, review, repairs, checkpoints, and final verification. This patch does not stream individual PI tokens or tool calls.
-
-The event log is observational, not a source of truth for task status. The existing state store remains authoritative.
+Start with the [operator quick-start](docs/operator-quick-start.md) for a planning-only workflow and read-only diagnostics.
 
 ## Read-only dashboard
 
@@ -139,7 +130,7 @@ An opened PR is recorded as `pr-opened`, not as a completed merge. **The factory
 
 Preparation/publication use both the run lock and a repository-wide integration lock. These coordinate this factory locally; **do not concurrently check out branches or change refs/worktrees using other tools**. The factory checks before/after Git operations, but its PID locks do not lock out external Git clients. A crash after publication starts leaves `publishing` state and requires manual reconciliation; it will not blindly retry or roll back a possibly updated target. Failed pre-publication checks never intentionally update the target.
 
-**Not implemented:** automatic conflict resolution, adoption of manually resolved/amended candidates, remote push, automatic worktree cleanup, or adding tasks to a completed run. Conflicted candidates are preserved diagnostic workspaces in this version, not resumable implementation tasks. Publication refuses them; use a separately authorized resolution workflow and a fresh candidate (within budget), or perform manual integration outside the factory.
+**Not implemented:** automatic conflict resolution, adoption of manually resolved/amended candidates, automatic worktree cleanup, or adding tasks to a completed run. Conflicted candidates are preserved diagnostic workspaces in this version, not resumable implementation tasks. Publication refuses them; use a separately authorized resolution workflow and a fresh candidate (within budget), or perform manual integration outside the factory.
 
 ### Supplying integration review context
 
