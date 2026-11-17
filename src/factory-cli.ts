@@ -20,6 +20,7 @@ import { amendRunPlan } from './plan-amendment.ts';
 import { validateSelectionConfig, type SelectionConfig } from './selection-config.ts';
 import { DashboardReader } from './dashboard-reader.ts';
 import { diagnoseRepository } from './doctor-repository.ts';
+import { diagnoseRuns } from './doctor-runs.ts';
 
 interface Config {
   agents: { planner: AgentModel; implementer: AgentModel; reviewer: AgentModel };
@@ -139,7 +140,10 @@ async function doctorCommand(flags:Record<string,string|boolean>):Promise<void> 
   }
   if (flags.repo !== undefined) {
     if (typeof flags.repo !== 'string' || !flags.repo.trim()) blockers.push('Repository: provide a Git working-tree root with --repo.');
-    else await diagnoseRepository(flags.repo, blockers, warnings);
+    else {
+      await diagnoseRepository(flags.repo, blockers, warnings);
+      await diagnoseRuns(flags.repo, warnings);
+    }
   }
   console.log('Prerequisite, configuration and repository diagnostics (read-only):');
   console.log('Blockers:');
