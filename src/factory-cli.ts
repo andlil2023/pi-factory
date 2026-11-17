@@ -17,6 +17,7 @@ import { prepareIntegration, publishIntegration, publishPullRequest, hasGitRemot
 import { captureRunGitState, configurationFingerprint, prepareRunResume, validateRunGitState, assertRunCheckpoint, MAX_GUIDANCE_LENGTH } from './run-recovery.ts';
 import { amendRunPlan } from './plan-amendment.ts';
 import { validateSelectionConfig, type SelectionConfig } from './selection-config.ts';
+import { DashboardReader } from './dashboard-reader.ts';
 
 interface Config {
   agents: { planner: AgentModel; implementer: AgentModel; reviewer: AgentModel };
@@ -374,16 +375,43 @@ async function statusCommand(flags:Record<string,string|boolean>):Promise<void> 
     console.log(`${entry.task.id}: superseded by plan amendment, attempts=${entry.task.attempts.length}${infraRetries ? `, infrastructure retries used=${infraRetries}` : ''}`);
   }
 }
+async function listCommand(flags:Record<string,string|boolean>):Promise<void> {
+  const entries=await new DashboardReader(resolve(required(flags,'repo'))).listRuns();
+  console.log('Persisted status only; running is not proof of process liveness.');
+  const topics: Array<[string, RegExp]> = [
+    ['testing', /\b(test|tests|testing|verification)\b/i],
+    ['documentation', /\b(documentation|docs|readme)\b/i],
+    ['security', /\b(security|secure|authentication)\b/i],
+    ['interface', /\b(ui|interface|dashboard)\b/i],
+    ['CLI', /\b(cli|command.line)\b/i],
+    ['repository', /\b(git|repository|worktree)\b/i]
+  ];
+  for (const entry of entries) {
+    const id=entry.runId;
+    if (!entry.available) { console.log(`${id}: unavailable`); continue; }
+    const run=entry.run;
+    const labels=topics.filter(([,pattern])=>pattern.test(run.objectiveSummary??'')).map(([label])=>label);
+    const activity=/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{3})?Z$/.test(run.updatedAt) ? run.updatedAt : 'unavailable';
+    const kinds=new Set<string>();
+    if (run.status==='blocked') for (const task of run.tasks) {
+      const attempt=task.attempts.at(-1);
+      if (task.status!=='blocked' || attempt?.outcome!=='blocked') continue;
+      for (const blocker of attempt.blockers) if (typeof blocker.kind==='string' && ['decision_needed','environment_missing','task_too_large'].includes(blocker.kind)) kinds.add(blocker.kind);
+    }
+    console.log(`${id}: inferred topics: ${labels.join(', ') || 'unavailable'}; persisted status: ${run.status}; last recorded activity: ${activity}; blocking reason: ${[...kinds].sort().join(', ') || 'unavailable'}`);
+  }
+}
 async function main():Promise<void> {
   const {command,flags}=argsMap(process.argv.slice(2));
   if(command==='plan') return planCommand(flags);
   if(command==='run') return runCommand(flags);
   if(command==='status') return statusCommand(flags);
+  if(command==='run-list') return listCommand(flags);
   if(command==='resume') return resumeCommand(flags);
   if(command==='replan') return replanCommand(flags);
   if(command==='amend') return amendCommand(flags);
   if(command==='integrate') return integrateCommand(flags);
-  console.log('Usage:\n  npm run factory -- plan --repo PATH --objective FILE --output FILE\n  npm run factory -- run --repo PATH --plan FILE --approve\n  npm run factory -- status --repo PATH --run RUN_ID\n  npm run factory -- resume --repo PATH --run RUN_ID --approve [--retry-task TASK_ID [--guidance FILE]] [--recover-lock]\n  npm run factory -- replan --repo PATH --run RUN_ID --output FILE [--guidance FILE]\n  npm run factory -- amend --repo PATH --run RUN_ID --plan FILE --approve\n  npm run factory -- integrate --repo PATH --run RUN_ID --approve [--new-attempt] [--guidance FILE]\n  npm run factory -- integrate --repo PATH --run RUN_ID --publish --candidate SHA --approve');
+  console.log('Usage:\n  npm run factory -- run-list --repo PATH\n  npm run factory -- plan --repo PATH --objective FILE --output FILE\n  npm run factory -- run --repo PATH --plan FILE --approve\n  npm run factory -- status --repo PATH --run RUN_ID\n  npm run factory -- resume --repo PATH --run RUN_ID --approve [--retry-task TASK_ID [--guidance FILE]] [--recover-lock]\n  npm run factory -- replan --repo PATH --run RUN_ID --output FILE [--guidance FILE]\n  npm run factory -- amend --repo PATH --run RUN_ID --plan FILE --approve\n  npm run factory -- integrate --repo PATH --run RUN_ID --approve [--new-attempt] [--guidance FILE]\n  npm run factory -- integrate --repo PATH --run RUN_ID --publish --candidate SHA --approve');
   if(command) process.exitCode=1;
 }
 main().catch(e=>{console.error(e instanceof Error?e.stack:e);process.exitCode=1;});
