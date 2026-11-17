@@ -1,0 +1,15 @@
+{
+  "verification": [
+    { "executable": "node", "args": ["scripts/check-api.mjs"] },
+    { "executable": "node", "args": ["scripts/check-web.mjs"] },
+    { "executable": "node", "args": ["scripts/check-shared.mjs"] }
+  ],
+  "verificationSelection": {
+    "rules": [
+      { "path": "api", "commands": [0, 2] },
+      { "path": "web", "commands": [1, 2] }
+    ],
+    "dependencyPaths": ["scripts", "package.json", "package-lock.json", "eslint.config.js", ".eslintrc.json"],
+    "dependenciesComprehensive": true
+  }
+}

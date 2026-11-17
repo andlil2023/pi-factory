@@ -56,6 +56,11 @@ for (const budget of [undefined, 2] as const) test(`CLI pins ${budget === undefi
   const mismatch = runCli('resume', '--repo', repository, '--run', blocked.runId, '--retry-task', 'T002', '--approve');
   assert.notEqual(mismatch.status, 0);
   assert.match(mismatch.stderr, /original execution configuration/);
+  const selection = { rules: [{ path: 'T002.txt', commands: [0] }], dependencyPaths: [], dependenciesComprehensive: true };
+  await writeFile(config, JSON.stringify({ ...settings, verificationSelection: selection }));
+  const selectionMismatch = runCli('resume', '--repo', repository, '--run', blocked.runId, '--retry-task', 'T002', '--approve');
+  assert.notEqual(selectionMismatch.status, 0);
+  assert.match(selectionMismatch.stderr, /original execution configuration/);
   await writeFile(config, JSON.stringify(settings));
   const acceptedWork = await readFile(join(worktree, 'T001.txt'), 'utf8');
   const failedWork = await readFile(join(worktree, 'T002.txt'), 'utf8');
@@ -93,6 +98,11 @@ for (const budget of [undefined, 2] as const) test(`CLI pins ${budget === undefi
   const unapprovedIntegration = runCli('integrate', '--repo', repository, '--run', blocked.runId);
   assert.equal(unapprovedIntegration.status, 1);
   assert.match(unapprovedIntegration.stderr, /requires --approve/);
+  await writeFile(config, JSON.stringify({ ...settings, verificationSelection: selection }));
+  const integrationMismatch = runCli('integrate', '--repo', repository, '--run', blocked.runId, '--approve');
+  assert.notEqual(integrationMismatch.status, 0);
+  assert.match(integrationMismatch.stderr, /original execution configuration/);
+  await writeFile(config, JSON.stringify(settings));
   const prepared = runCli('integrate', '--repo', repository, '--run', blocked.runId, '--approve');
   assert.equal(prepared.status, 0, prepared.stdout + prepared.stderr);
   const ready = JSON.parse(await readFile(statePath, 'utf8')) as FactoryRunState;
