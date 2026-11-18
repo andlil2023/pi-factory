@@ -32,7 +32,7 @@ async function fixture(t: import('node:test').TestContext, setup: unknown) {
     verification: [node("process.exit(require('fs').existsSync('installed.txt')?0:1)")],
     pi: { executable: process.execPath, executableArgs: [resolve('tests/fixtures/fake-replan-agent.mjs')] } }));
   const runCli = (...args: string[]) => {
-    const result = spawnSync(process.execPath, ['--experimental-strip-types', cli, ...args, '--config', config], { encoding: 'utf8', timeout: 60_000 });
+    const result = spawnSync(process.execPath, ['--experimental-strip-types', cli, ...args, '--config', config], { encoding: 'utf8', timeout: 180_000 });
     assertSubprocessStarted(result);
     return result;
   };

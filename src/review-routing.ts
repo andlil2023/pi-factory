@@ -30,7 +30,9 @@ export function selectTaskReviewers(task: PlannedTask, changedFiles: string[], e
       if (!documentation && !/\.(?:png|jpe?g|gif|webp|ico|css|scss|sass|less)$/.test(path)) {
         add(['security'], `Source, configuration, or unknown artifact: ${original}`);
       }
-      if (!security && !ui && !documentation) add(enabled, `Ambiguous path: ${original}`);
+      // An unclassified path may cross a trust boundary, but it is not evidence of a user interface:
+      // the UI reviewer is selected by UI paths or UI task text only.
+      if (!security && !ui && !documentation) add(enabled.filter(id => id !== 'ui'), `Ambiguous path: ${original}`);
     }
     const text = [task.title, task.objective, task.scope, ...task.acceptanceCriteria, ...task.verification].join(' ');
     if (/\b(auth\w*|permission\w*|secret\w*|credential\w*|secur\w*|api|database|migration\w*|data|injection|encrypt\w*)\b/i.test(text)) add(['security'], 'Task text indicates security, API, or data scope');

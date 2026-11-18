@@ -27,7 +27,7 @@ interface Config {
   reviewers?: SpecialistReviewers;
   reviewRouting?: ReviewRouting;
   uiEvidence?: { command: UiEvidenceCommand };
-  execution?: { maxAttempts?: number; maxInfraRetries?: number };
+  execution?: { maxAttempts?: number; maxInfraRetries?: number; verificationReruns?: number };
   verification?: Array<{ executable: string; args?: string[]; timeoutMs?: number }>;
   verificationSelection?: SelectionConfig;
   /** Trusted commands that prepare every fresh run or integration worktree, for example a dependency install. */
@@ -85,6 +85,8 @@ async function configFrom(flags:Record<string,string|boolean>):Promise<Config> {
   if (!Number.isSafeInteger(maxAttempts) || maxAttempts < 1) throw new Error('Invalid execution.maxAttempts');
   const maxInfraRetries = config.execution?.maxInfraRetries === undefined ? 1 : config.execution.maxInfraRetries;
   if (!Number.isSafeInteger(maxInfraRetries) || maxInfraRetries < 0) throw new Error('Invalid execution.maxInfraRetries');
+  const verificationReruns = config.execution?.verificationReruns ?? 1;
+  if (!Number.isSafeInteger(verificationReruns) || verificationReruns < 0 || verificationReruns > 3) throw new Error('Invalid execution.verificationReruns; use 0-3');
   if (config.uiEvidence !== undefined) {
     if (!config.uiEvidence || !config.reviewers?.ui) throw new Error('uiEvidence requires an enabled UI reviewer');
     validateUiEvidenceCommand(config.uiEvidence.command);
@@ -188,6 +190,8 @@ async function runVerificationCommand(cwd: string, command: {executable:string;a
     child.on('close', code => finish(code===0));
   });
 }
+
+type FinalCheck = {command:string;passed:boolean;stdout:string;stderr:string;flaky?:true;firstFailure?:{stdout:string;stderr:string}};
 
 /** A fresh worktree has no ignored files such as node_modules; nothing else installs them before deterministic verification. */
 async function runSetup(worktree:string,config:Config):Promise<void> {
@@ -308,6 +312,7 @@ async function executeRun(store:StateStore,state:FactoryRunState,config:Config):
     piExecutable:launch.executable,piExecutableArgs:launch.executableArgs,
     implementer:config.agents.implementer,reviewer:config.agents.reviewer,reviewers:config.reviewers,reviewRouting:config.reviewRouting,
     verification:config.verification!,verificationSelection:config.verificationSelection,baselineCommit:git.expectedHead,
+    verificationReruns:config.execution?.verificationReruns??1,logDirectory:join(store.directory,runId,'logs'),
     uiEvidence:config.uiEvidence ? { command:config.uiEvidence.command, directory:join(store.directory,runId,'ui-evidence') } : undefined};
   const adapters=createAgentAdapters(adapterConfig);
   console.log(`Run ${runId}; worktree: ${worktree.path}`);
@@ -333,11 +338,17 @@ async function executeRun(store:StateStore,state:FactoryRunState,config:Config):
     finalVerify: async () => {
       // Run the same trusted commands against the final committed worktree.
       await assertRunCheckpoint(state);
-      const details: Array<{command:string;passed:boolean;stdout:string;stderr:string}> = [];
+      const details: FinalCheck[] = [];
       state.finalVerificationProgress = {mode:'full',completed:0,total:config.verification!.length,failed:0};
       await store.save(state);
       for (const command of config.verification ?? []) {
-        const outcome = await runVerificationCommand(worktree.path, command);
+        let outcome: FinalCheck = await runVerificationCommand(worktree.path, command);
+        // Same rule as task verification: a rerun that passes is accepted and recorded as flaky.
+        for (let rerun = 1; !outcome.passed && rerun <= (config.execution?.verificationReruns ?? 1); rerun++) {
+          const again = await runVerificationCommand(worktree.path, command);
+          if (again.passed) outcome = {...again, flaky:true, firstFailure:{stdout:outcome.stdout.slice(-8000),stderr:outcome.stderr.slice(-8000)}};
+          else outcome = again;
+        }
         details.push(outcome);
         state.finalVerificationProgress = {mode:'full',completed:details.length,total:config.verification!.length,failed:details.filter(check=>!check.passed).length};
         await store.save(state);
@@ -394,6 +405,7 @@ async function integrateCommand(flags:Record<string,string|boolean>):Promise<voi
           implementer:config.agents.implementer,reviewer:config.agents.reviewer,reviewers:config.reviewers,reviewRouting:config.reviewRouting,
           // Integration preparation and publication must never use task-level selection.
           verification:config.verification!,baselineCommit:baseline,
+          verificationReruns:config.execution?.verificationReruns??1,logDirectory:join(store.directory,runId,'integration-logs',String(attempt)),
           uiEvidence:config.uiEvidence?{command:config.uiEvidence.command,directory:join(store.directory,runId,'integration-evidence',String(attempt))}:undefined})
       };
       const record=flags.publish===true
@@ -426,7 +438,8 @@ async function statusCommand(flags:Record<string,string|boolean>):Promise<void> 
   for (const integration of state.integrations ?? []) console.log(`Integration ${integration.number}: ${integration.status}; candidate: ${integration.commit ?? 'none'}; worktree: ${integration.worktree}`);
   for(const task of Object.values(state.tasks)) {
     const infraRetries = consumedInfraRetries(task);
-    console.log(`${task.id}: ${task.status}, attempts=${task.attempts.length} (budget used ${consumedAttempts(task)}/${state.execution?.maxAttempts??'?'})${infraRetries ? `, infrastructure retries used=${infraRetries}` : ''}${task.lastError?` — ${task.lastError}`:''}`);
+    const flakyRuns = task.attempts.filter(attempt => Array.isArray((attempt.verification as {details?:{flaky?:unknown}}|undefined)?.details?.flaky)).length;
+    console.log(`${task.id}: ${task.status}, attempts=${task.attempts.length} (budget used ${consumedAttempts(task)}/${state.execution?.maxAttempts??'?'})${infraRetries ? `, infrastructure retries used=${infraRetries}` : ''}${flakyRuns ? `, verification passed only on rerun in ${flakyRuns} attempt(s)` : ''}${task.lastError?` — ${task.lastError}`:''}`);
   }
   for(const task of Object.values(state.tasks)) if(task.status==='blocked') console.log(nextStep(task,state.execution?.maxAttempts));
   for(const entry of state.supersededTasks ?? []) {

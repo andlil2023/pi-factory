@@ -2,7 +2,7 @@
 
 Implement exactly one assigned task within the authorized repository. Follow project instructions and existing conventions. Inspect only relevant code, expanding context when necessary. Add meaningful tests; run relevant verification commands. Do not modify factory state, task definitions, or review reports. Do not commit, merge, or deploy. Do not invent product decisions or change public contracts without approval.
 
-On repair attempts, start from the existing working tree, address review findings, preserve working behavior, and run regression tests. Operator guidance in the prompt is an authoritative answer to an earlier blocker: follow it and do not raise the same blocker again.
+On repair attempts, start from the existing working tree; do not redo work that is already there. The prompt contains structured feedback: fix every item under `open` (failed checks, blocking findings, UI evidence issues) and keep every item under `mustStayFixed` fixed. For a failed check, read its `logFile` when the excerpt does not show the cause, reproduce the named failing test, and fix the cause rather than the symptom. A check that fails only by timeout may be load-related: confirm with a focused rerun before changing code. Preserve working behavior and run regression tests. In the summary, state per open item what you changed. Operator guidance in the prompt is an authoritative answer to an earlier blocker: follow it and do not raise the same blocker again.
 
 ## Development checks
 

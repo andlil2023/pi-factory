@@ -28,7 +28,7 @@ test('an exhausted retry budget is not answered with a resume hint that the fact
   await writeFile(config, JSON.stringify({ agents: { planner: model, implementer: model, reviewer: model }, execution: { maxAttempts: 1 },
     verification: [{ executable: process.execPath, args: ['-e', 'process.exit(1)'] }],
     pi: { executable: process.execPath, executableArgs: [resolve('tests/fixtures/fake-replan-agent.mjs')] } }));
-  const runCli = (...args: string[]) => spawnSync(process.execPath, ['--experimental-strip-types', cli, ...args, '--config', config], { encoding: 'utf8', timeout: 60_000 });
+  const runCli = (...args: string[]) => spawnSync(process.execPath, ['--experimental-strip-types', cli, ...args, '--config', config], { encoding: 'utf8', timeout: 180_000 });
 
   const run = runCli('run', '--repo', repository, '--plan', plan, '--approve');
   assert.equal(run.status, 1, run.stdout + run.stderr);

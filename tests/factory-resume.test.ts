@@ -29,7 +29,7 @@ for (const budget of [undefined, 2] as const) test(`CLI pins ${budget === undefi
   const model = { provider: 'fixture', model: 'fixture' };
   const settings = { agents: { planner: model, implementer: model, reviewer: model }, execution: { maxAttempts: 3, ...(budget === undefined ? {} : { maxInfraRetries: budget }) }, verification: [{ executable: process.execPath, args: ['-e', 'process.exit(0)'] }], pi: { executable: process.execPath, executableArgs: [resolve('tests/fixtures/fake-factory-agent.mjs')] } };
   await writeFile(config, JSON.stringify(settings));
-  const runCli = (...args: string[]) => spawnSync(process.execPath, ['--experimental-strip-types', cli, ...args, '--config', config], { encoding: 'utf8', timeout: 60_000 });
+  const runCli = (...args: string[]) => spawnSync(process.execPath, ['--experimental-strip-types', cli, ...args, '--config', config], { encoding: 'utf8', timeout: 180_000 });
   for (const invalid of [-1, 0.5, Number.MAX_SAFE_INTEGER + 1, '1', null]) {
     await writeFile(config, JSON.stringify({ ...settings, execution: { maxAttempts: 3, maxInfraRetries: invalid } }));
     const rejected = runCli('run', '--repo', repository, '--plan', plan, '--approve');

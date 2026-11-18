@@ -18,7 +18,11 @@ for (const mode of ['passed', 'failed', 'not-selected'] as const) {
     let collected = 0;
     let reviewed = 0;
     const result = await new Orchestrator(store, {
-      implement: async () => ({ outcome: 'implemented', report: { claim: 'UI looks fine' } }),
+      implement: async context => {
+        // Rejected evidence is repairable work: the next fresh session receives the issues.
+        if (context.attempt > 1) assert.deepEqual(context.feedback?.open.uiEvidenceIssues, ['Missing screenshot']);
+        return { outcome: 'implemented', report: { claim: 'UI looks fine' } };
+      },
       verify: async () => ({ passed: true, details: {} }),
       selectReviewers: async () => ({ requiredReviewers: mode === 'not-selected' ? ['code'] : ['code', 'ui'], changedFiles: [], reasons: [] }),
       collectUiEvidence: async () => { collected++; return record; },
@@ -33,10 +37,11 @@ for (const mode of ['passed', 'failed', 'not-selected'] as const) {
       }
     }, { requiredReviewers: ['code', 'ui'] }).execute(state, [task]);
     assert.equal(result.status, mode === 'failed' ? 'blocked' : 'completed');
-    assert.equal(collected, mode === 'not-selected' ? 0 : 1);
+    assert.equal(collected, mode === 'not-selected' ? 0 : mode === 'failed' ? 3 : 1);
     assert.equal(reviewed, mode === 'failed' ? 0 : 1);
     if (mode === 'failed') {
-      assert.match(result.tasks.T001.lastError!, /UI evidence rejected: Missing screenshot/);
+      assert.match(result.tasks.T001.lastError!, /Maximum attempts \(3\) exhausted: UI evidence rejected: Missing screenshot/);
+      assert.equal(result.tasks.T001.attempts.length, 3);
       assert.deepEqual((await store.load('ui-gate')).tasks.T001.attempts[0].uiEvidence, record);
     }
   });

@@ -3,6 +3,7 @@ import { AgentExecutionError } from './agent-error.ts';
 import { appendReviewResult, reconcileReviewResults } from './review-results.ts';
 import type { ReviewSelection } from './review-routing.ts';
 import type { UiEvidenceRecord } from './ui-evidence.ts';
+import { buildAttemptFeedback, type AttemptFeedback } from './attempt-feedback.ts';
 import { consumedAttempts, consumedInfraRetries, type FactoryRunState, type StateStore, type AttemptRecord, type ReviewVerdict, type VerificationProgress } from './state-store.ts';
 
 export interface PlannedTask {
@@ -42,6 +43,8 @@ export interface TaskContext {
   plan?: unknown;
   attempt: number;
   previousFeedback: unknown[];
+  /** Structured view of the previous attempts of this task; absent on a first attempt. */
+  feedback?: AttemptFeedback;
   /** Operator answers recorded on approved retries of this task; authoritative. */
   operatorGuidance?: string[];
   /** Integration-only provenance. Historical checks and operator reports are not current candidate proof. */
@@ -139,6 +142,8 @@ export class Orchestrator {
         ].filter(x => x !== undefined));
         const operatorGuidance = (state.resumptions ?? []).flatMap(r => r.retryTask === ready.id && r.guidance ? [r.guidance] : []);
         const context: TaskContext = { task: ready, plan: structuredClone(state.plan), attempt: attempt.number, previousFeedback: feedback, ...(operatorGuidance.length ? { operatorGuidance } : {}) };
+        const structured = buildAttemptFeedback(taskState.attempts.slice(0, -1));
+        if (structured) context.feedback = structured;
         context.onVerificationProgress = async progress => {
           attempt.verificationProgress = progress;
           await this.store.save(state);
@@ -191,44 +196,51 @@ export class Orchestrator {
               context.requiredReviewers = [...reviewSelection.requiredReviewers];
               taskState.status = 'needs_review';
               await this.store.save(state);
+              let evidenceRejected = false;
               if (reviewSelection.requiredReviewers.includes('ui') && this.adapters.collectUiEvidence) {
                 await phase('collecting_ui_evidence');
                 const uiEvidence = await this.adapters.collectUiEvidence(context);
                 attempt.uiEvidence = uiEvidence;
                 context.uiEvidence = uiEvidence;
                 await this.store.save(state);
-                if (!uiEvidence.passed) throw new Error(`UI evidence rejected: ${uiEvidence.issues.join('; ')}`);
+                evidenceRejected = !uiEvidence.passed;
               }
-              await phase('reviewing');
-              this.options.events?.emit({type:'AGENT_STARTED',taskId:ready.id,agent:'reviewer',attempt:attempt.number});
-              const reviews = await this.adapters.review(context, implementation, verification, async review => {
-                attempt.reviews ??= [];
-                appendReviewResult(attempt.reviews, review, reviewSelection.requiredReviewers);
-                await this.store.save(state);
-              });
-              this.options.events?.emit({type:'AGENT_COMPLETED',taskId:ready.id,agent:'reviewer',attempt:attempt.number});
-              for (const review of reviews) this.options.events?.emit({type:review.verdict==='approved'?'REVIEW_APPROVED':review.verdict==='changes_requested'?'REVIEW_CHANGES_REQUESTED':'REVIEW_BLOCKED',taskId:ready.id,agent:review.reviewer,attempt:attempt.number});
-              attempt.reviews = reconcileReviewResults(attempt.reviews ?? [], reviews);
-              const byReviewer = new Map(reviews.map(r => [r.reviewer, r]));
-              const validSet = reviews.length === byReviewer.size && reviews.length === reviewSelection.requiredReviewers.length && reviewSelection.requiredReviewers.every(r => byReviewer.has(r));
-              if (!validSet || reviews.some(r => r.verdict === 'blocked')) {
-                taskState.status = 'blocked';
-                taskState.lastError = 'Missing, duplicate, or blocked required review';
-              } else if (reviews.some(r => r.verdict === 'changes_requested')) {
+              if (evidenceRejected) {
+                // Rejected evidence is a result of the work, like a failed test: repair within the budget, with the issues as feedback.
                 taskState.status = 'repair_pending';
-                taskState.lastError = 'Review requested changes';
+                taskState.lastError = `UI evidence rejected: ${attempt.uiEvidence!.issues.join('; ')}`;
               } else {
-                if (this.adapters.checkpoint) {
-                  await phase('checkpointing');
-                  const result = await this.adapters.checkpoint(context);
-                  if (!result.commit) throw new Error('Checkpoint did not return a commit SHA');
-                  attempt.checkpointCommit = result.commit;
-                  taskState.checkpointCommit = result.commit;
-                  this.options.events?.emit({type:'CHECKPOINT_CREATED',taskId:ready.id,attempt:attempt.number,message:result.commit});
+                await phase('reviewing');
+                this.options.events?.emit({type:'AGENT_STARTED',taskId:ready.id,agent:'reviewer',attempt:attempt.number});
+                const reviews = await this.adapters.review(context, implementation, verification, async review => {
+                  attempt.reviews ??= [];
+                  appendReviewResult(attempt.reviews, review, reviewSelection.requiredReviewers);
+                  await this.store.save(state);
+                });
+                this.options.events?.emit({type:'AGENT_COMPLETED',taskId:ready.id,agent:'reviewer',attempt:attempt.number});
+                for (const review of reviews) this.options.events?.emit({type:review.verdict==='approved'?'REVIEW_APPROVED':review.verdict==='changes_requested'?'REVIEW_CHANGES_REQUESTED':'REVIEW_BLOCKED',taskId:ready.id,agent:review.reviewer,attempt:attempt.number});
+                attempt.reviews = reconcileReviewResults(attempt.reviews ?? [], reviews);
+                const byReviewer = new Map(reviews.map(r => [r.reviewer, r]));
+                const validSet = reviews.length === byReviewer.size && reviews.length === reviewSelection.requiredReviewers.length && reviewSelection.requiredReviewers.every(r => byReviewer.has(r));
+                if (!validSet || reviews.some(r => r.verdict === 'blocked')) {
+                  taskState.status = 'blocked';
+                  taskState.lastError = 'Missing, duplicate, or blocked required review';
+                } else if (reviews.some(r => r.verdict === 'changes_requested')) {
+                  taskState.status = 'repair_pending';
+                  taskState.lastError = 'Review requested changes';
+                } else {
+                  if (this.adapters.checkpoint) {
+                    await phase('checkpointing');
+                    const result = await this.adapters.checkpoint(context);
+                    if (!result.commit) throw new Error('Checkpoint did not return a commit SHA');
+                    attempt.checkpointCommit = result.commit;
+                    taskState.checkpointCommit = result.commit;
+                    this.options.events?.emit({type:'CHECKPOINT_CREATED',taskId:ready.id,attempt:attempt.number,message:result.commit});
+                  }
+                  taskState.status = 'completed';
+                  this.options.events?.emit({type:'TASK_COMPLETED',taskId:ready.id});
+                  delete taskState.lastError;
                 }
-                taskState.status = 'completed';
-                this.options.events?.emit({type:'TASK_COMPLETED',taskId:ready.id});
-                delete taskState.lastError;
               }
             }
           }
