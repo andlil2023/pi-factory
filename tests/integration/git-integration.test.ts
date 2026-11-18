@@ -9,7 +9,7 @@ import { StateStore } from '../../src/state-store.ts';
 import { createWorktree } from '../../src/git-worktree.ts';
 import { createGitCheckpoint } from '../../src/git-checkpoint.ts';
 import { captureRunGitState } from '../../src/run-recovery.ts';
-import { prepareIntegration, publishIntegration, publishPullRequest, type IntegrationOptions } from '../../src/git-integration.ts';
+import { prepareIntegration, publishIntegration, publishPullRequest, reconcilePullRequest, type IntegrationOptions } from '../../src/git-integration.ts';
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
@@ -137,6 +137,67 @@ test('GitHub publication pushes the reviewed candidate and records an open PR, n
   assert.equal(git(repository, 'rev-parse', 'HEAD'), record.targetHead);
   assert.equal((await store.load(state.runId)).integrations?.[0].status, 'pr-opened');
   await assert.rejects(prepareIntegration(store, state, options, true), /already published/);
+});
+
+async function reconciliationFixture(t: import('node:test').TestContext) {
+  const f = await fixture(t);
+  const record = await prepareIntegration(f.store, f.state, f.options);
+  assert.equal(record.status, 'ready', record.error);
+  record.status = 'pr-opened'; record.phase = 'pr_opened';
+  record.pullRequest = { repository: 'owner/repo', remote: 'origin', pushUrl: 'https://github.com/owner/repo.git', base: record.targetBranch, baseSha: record.targetHead, head: record.branch, headSha: record.commit!, url: 'https://github.com/owner/repo/pull/1' };
+  await f.store.save(f.state);
+  const response = { state: 'MERGED', url: record.pullRequest.url, baseRefName: record.targetBranch, headRefName: record.branch, headRefOid: record.commit!, mergedAt: '2026-01-02T03:04:05Z', mergeCommit: { oid: 'a'.repeat(40) } };
+  return { ...f, record, response };
+}
+
+test('reconciliation records a verified merge once and is idempotent', async t => {
+  const { store, state, record, response } = await reconciliationFixture(t);
+  let reads = 0, saves = 0;
+  const save = store.save.bind(store);
+  store.save = async value => { saves++; await save(value); };
+  const api = { readPullRequest: async (cwd: string, repo: string, url: string) => {
+    reads++; assert.equal(cwd, state.repository); assert.equal(repo, 'owner/repo'); assert.equal(url, response.url); return response;
+  } };
+  assert.equal(await reconcilePullRequest(store, state, api), record);
+  assert.equal(record.status, 'published'); assert.equal(record.phase, 'published');
+  assert.equal(record.publishedAt, response.mergedAt); assert.equal(record.pullRequest?.mergeCommit, response.mergeCommit.oid);
+  assert.deepEqual((await store.load(state.runId)).integrations!.at(-1), record);
+  assert.equal(await reconcilePullRequest(store, state, api), record);
+  assert.equal(reads, 1); assert.equal(saves, 1);
+});
+
+test('reconciliation rejects ineligible states with actual statuses', async t => {
+  const { store, state, record } = await reconciliationFixture(t);
+  state.status = 'blocked'; record.status = 'ready';
+  await assert.rejects(reconcilePullRequest(store, state, { readPullRequest: async () => assert.fail() }), /run: blocked, integration: ready/);
+});
+
+test('reconciliation refuses mismatched merged evidence without saving', async t => {
+  const { store, state, response } = await reconciliationFixture(t);
+  const original = await store.load(state.runId);
+  for (const change of [
+    { url: 'https://github.com/owner/repo/pull/2' }, { baseRefName: 'other' }, { headRefName: 'other' },
+    { headRefOid: 'b'.repeat(40) }, { mergedAt: 'not-a-date' }, { mergedAt: null },
+    { mergeCommit: { oid: 'invalid' } }, { mergeCommit: null }
+  ]) {
+    await assert.rejects(reconcilePullRequest(store, state, { readPullRequest: async () => ({ ...response, ...change }) }), /not the reviewed candidate/);
+    assert.deepEqual(await store.load(state.runId), original);
+    assert.equal((await store.load(state.runId)).integrations!.at(-1)!.status, 'pr-opened');
+  }
+});
+
+test('reconciliation handles open, closed and unreadable GitHub responses without changes', async t => {
+  const { store, state, record, response } = await reconciliationFixture(t);
+  const original = await store.load(state.runId);
+  assert.equal(await reconcilePullRequest(store, state, { readPullRequest: async () => ({ ...response, state: 'OPEN', mergedAt: null, mergeCommit: null }) }), record);
+  await assert.rejects(reconcilePullRequest(store, state, { readPullRequest: async () => ({ ...response, state: 'CLOSED', mergedAt: null, mergeCommit: null }) }), /closed without merging/);
+  for (const readPullRequest of [async () => { throw new Error('SECRET_TRANSPORT_OUTPUT'); }, async () => JSON.parse('{invalid'), async () => ({ ...response, headRefOid: 123 }), async () => ({ ...response, mergeCommit: { oid: 123 } })]) {
+    await assert.rejects(reconcilePullRequest(store, state, { readPullRequest }), error => {
+      assert.match(String(error), /GitHub could not be read/); assert.doesNotMatch(String(error), /SECRET_TRANSPORT_OUTPUT/); return true;
+    });
+    const saved = await store.load(state.runId);
+    assert.deepEqual(saved, original); assert.doesNotMatch(JSON.stringify(saved), /SECRET_TRANSPORT_OUTPUT/);
+  }
 });
 
 test('GitHub publication fails closed on a moved base or an ambiguous push', async t => {

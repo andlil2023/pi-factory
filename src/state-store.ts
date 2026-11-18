@@ -81,7 +81,7 @@ export interface IntegrationAttempt {
   uiEvidence?: UiEvidenceRecord;
   publishApprovedAt?: string;
   publishedAt?: string;
-  pullRequest?: { repository: string; remote: string; pushUrl: string; base: string; baseSha: string; head: string; headSha: string; url?: string };
+  pullRequest?: { repository: string; remote: string; pushUrl: string; base: string; baseSha: string; head: string; headSha: string; url?: string; mergeCommit?: string };
 }
 
 export interface FactoryRunState {
