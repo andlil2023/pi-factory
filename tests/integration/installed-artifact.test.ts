@@ -29,9 +29,14 @@ test('packed artifact installs and runs in a separate Git repository', { timeout
     const target = join(temp, 'sample');
     const caller = join(temp, 'caller');
     await Promise.all([mkdir(install), mkdir(target), mkdir(caller)]);
-    const packed = JSON.parse(checked(npm(['pack', '--json', '--pack-destination', temp], root), 'npm pack')) as Array<{ filename: string }>;
-    assert.equal(packed.length, 1);
-    const tarball = join(temp, packed[0].filename);
+    // CI supplies the exact tarball it will retain for release. Locally, pack one
+    // into the temporary directory so this test remains independently runnable.
+    let tarball = process.env.PI_FACTORY_TEST_TARBALL;
+    if (!tarball) {
+      const packed = JSON.parse(checked(npm(['pack', '--json', '--pack-destination', temp], root), 'npm pack')) as Array<{ filename: string }>;
+      assert.equal(packed.length, 1);
+      tarball = join(temp, packed[0].filename);
+    }
     checked(npm(['install', '--no-audit', '--no-fund', '--prefix', install, tarball], caller), 'npm install');
     checked(spawnSync('git', ['init', target], { cwd: caller, encoding: 'utf8' }), 'git init');
 

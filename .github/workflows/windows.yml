@@ -1,0 +1,42 @@
+name: Windows checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.12.0'
+          cache: npm
+      - run: npm ci
+      # Pack once: the integration test installs this exact file, and the
+      # release job can download it only after all checks have passed.
+      - name: Prepare package artifact
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $package = npm pack --pack-destination dist
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "PI_FACTORY_TEST_TARBALL=$((Resolve-Path (Join-Path dist $package)).Path)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Type check
+        run: npm run check
+      - name: Fast tests
+        run: npm run test:fast
+      - name: Integration tests
+        run: npm run test:integration
+      - name: Retain tested package
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-tested-package
+          path: dist/*.tgz
+          if-no-files-found: error
+          retention-days: 30
