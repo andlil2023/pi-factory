@@ -14,6 +14,12 @@ test('run-list safely displays persisted evidence without changing files or git'
     const dir=join(repo,'.factory','runs'); await mkdir(dir,{recursive:true});
     const base={version:1,repository:repo,createdAt:'2025-01-01T00:00:00.000Z',updatedAt:'2025-01-02T00:00:00.000Z',status:'blocked',plan:{objective:'Improve CLI testing password=secret SENTINEL'},tasks:{T001:{id:'T001',status:'blocked',attempts:[{number:1,startedAt:'x',outcome:'blocked',implementationReport:{blockers:[{kind:'decision_needed',description:'SENTINEL'}]}}]}}};
     await writeFile(join(dir,'valid.json'),JSON.stringify({...base,runId:'valid'}));
+    const flakyAttempt=(number:number,flaky:unknown)=>({number,startedAt:'x',verification:{passed:true,details:{flaky}}});
+    const revision={at:'2025-01-01',taskId:'T001',reason:'budget_exhausted',superseded:['T000'],added:['T001']};
+    await writeFile(join(dir,'revised.json'),JSON.stringify({...base,runId:'revised',autoReplans:[revision,revision],tasks:{
+      T001:{id:'T001',status:'completed',attempts:[flakyAttempt(1,['cmd1','cmd2']),flakyAttempt(2,[]),flakyAttempt(3,['cmd3'])]},
+      T002:{id:'T002',status:'completed',attempts:[flakyAttempt(1,[42])]}
+    },supersededTasks:[{supersededAt:'x',task:{id:'T000',status:'completed',attempts:[flakyAttempt(1,['old'])]}}]}));
     const longIds=['a'.repeat(120)+'1','a'.repeat(120)+'2'];
     for (const runId of longIds) await writeFile(join(dir,`${runId}.json`),JSON.stringify({...base,runId}));
     await writeFile(join(dir,'historical.json'),JSON.stringify({...base,runId:'historical',status:'running',plan:{objective:'SENTINEL'},tasks:{T001:{...base.tasks.T001,status:'running'}}}));
@@ -23,7 +29,9 @@ test('run-list safely displays persisted evidence without changing files or git'
     const before=git('status','--porcelain=v1','--untracked-files=all');
     const names=await readdir(dir); const contents=await Promise.all(names.filter(n=>n!=='missing.json').map(n=>readFile(join(dir,n))));
     const output=execFileSync(process.execPath,['--experimental-strip-types',cli,'run-list','--repo',repo],{encoding:'utf8'});
-    assert.match(output,/valid: inferred topics: testing, CLI; persisted status: blocked; last recorded activity: 2025-01-02T00:00:00.000Z; blocking reason: decision_needed/);
+    assert.ok(output.split(/\r?\n/).includes('valid: inferred topics: testing, CLI; persisted status: blocked; last recorded activity: 2025-01-02T00:00:00.000Z; blocking reason: decision_needed'));
+    assert.ok(output.split(/\r?\n/).includes('revised: inferred topics: testing, CLI; persisted status: blocked; last recorded activity: 2025-01-02T00:00:00.000Z; blocking reason: unavailable; automatic plan revisions: 2; attempts passed on rerun: 2'));
+    assert.doesNotMatch(output,/cmd1|cmd2|cmd3/);
     assert.match(output,/historical: inferred topics: unavailable; persisted status: running;.*blocking reason: unavailable/);
     const longLines=output.split('\n').filter(line=>longIds.some(id=>line.startsWith(`${id}:`)));
     assert.equal(longLines.length,2, 'long IDs with the same prefix remain distinct and complete');
