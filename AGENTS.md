@@ -21,6 +21,7 @@ Build a project-independent, resumable AI development factory using PI and GPT m
 ## Autonomous execution
 - A rejected task may be repaired in a fresh session with its original acceptance criteria and findings.
 - Retry only within configured budgets; preserve attempt history.
+- The orchestrator may replace a too-large or budget-exhausted task with a reviewed plan revision, within the configured replan budget; it saves leftover edits as a patch before resetting its own run worktree.
 - Stop for unresolved architectural, security, or product decisions.
 - Never merge, deploy, or run destructive commands without authorization.
 - Never leak secrets into prompts or logs.

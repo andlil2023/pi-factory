@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "title": "PI Factory Plan Review Report",
+  "required": ["verdict", "summary", "findings"],
+  "properties": {
+    "verdict": { "enum": ["approved", "changes_requested"] },
+    "summary": { "type": "string", "minLength": 1 },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["severity", "category", "description", "requiredChange"],
+        "properties": {
+          "severity": { "enum": ["blocking", "advisory"] },
+          "category": { "enum": ["spec_gap", "untraceable", "unverifiable", "task_size", "dependency", "other"] },
+          "taskId": { "type": "string", "pattern": "^T[0-9]{3,}$" },
+          "description": { "type": "string", "minLength": 1 },
+          "requiredChange": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

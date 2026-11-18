@@ -61,7 +61,7 @@ An implementer may stop a task only with a typed blocker. Free-text blockers and
 | --- | --- | --- |
 | `decision_needed` | A specific question the plan does not answer | Answer it in a file, then `resume --retry-task T002 --guidance FILE --approve` |
 | `environment_missing` | A tool, platform, or credential is unavailable | Provide it, then `resume --retry-task T002 --approve` |
-| `task_too_large` | The task does not fit one session; includes a proposed split | Replan and amend, see below |
+| `task_too_large` | The task does not fit one session; includes a proposed split | None while the automatic replan budget lasts; otherwise replan and amend, see below |
 
 Guidance is stored in run state with the approval and sent to the implementer and reviewers of that task as an authoritative answer. **Do not put secrets in a guidance file.**
 
@@ -75,11 +75,30 @@ npm run factory -- amend --repo PATH --run RUN_ID --plan revised-plan.json --app
 npm run factory -- resume --repo PATH --run RUN_ID --config CONFIG_FILE --approve
 ```
 
-`amend` accepts a hand-edited plan too. Completed tasks must stay unchanged. A task with attempts is either kept unchanged or removed and replaced by tasks with new IDs; its attempt history moves to `supersededTasks` and the old plan to `planRevisions`. The factory never cleans the worktree: if the superseded task left edits, inspect and remove them yourself before `resume`.
+`amend` accepts a hand-edited plan too. Completed tasks must stay unchanged. A task with attempts is either kept unchanged or removed and replaced by tasks with new IDs; its attempt history moves to `supersededTasks` and the old plan to `planRevisions`. A manual `amend` never cleans the worktree: if the superseded task left edits, inspect and remove them yourself before `resume`.
+
+### Automatic replanning
+
+`run` and `resume` do the replan, amend and resume steps themselves for two causes, up to `execution.maxAutoReplans` times per run (default 2; `0` restores the manual flow above):
+
+- the implementer reported `task_too_large`, or
+- the task used its whole repair budget (`execution.maxAttempts`) and was still rejected.
+
+The planner receives the structured failure record of the stopped task, an independent plan reviewer checks the revision, and the same rules as `amend` apply: completed tasks cannot change and the stopped task must be replaced by tasks with new IDs. Each automatic revision is recorded in `autoReplans` in run state, as a `PLAN_REVISED` event, and as `.factory/runs/RUN_ID/auto-replan/plan-N.json` with its review report.
+
+The factory stops for you, exactly as before, when the blocker is `decision_needed` or `environment_missing`, when a reviewer returned `blocked`, after an interruption or agent error, when the revised plan contains a blocking decision, when the planner keeps the stopped task, or when the replan budget is spent. Integration and publication still need `--approve`.
+
+**Worktree reset.** Replacement tasks must start from the last accepted checkpoint. Before applying an automatic revision the factory saves the uncommitted edits of the superseded task to `.factory/runs/RUN_ID/auto-replan/leftover-N-TASK.patch`, then runs `git reset --hard` and `git clean -fd` in the run worktree. This happens only in the factory-owned run worktree on its `factory/RUN_ID` branch at the recorded checkpoint, never in your repository checkout; ignored files such as installed dependencies are kept. Restore the edits with `git apply` if you need them. Set `execution.maxAutoReplans` to `0` if you do not want the factory to reset its worktree.
 
 **Retry budget.** `execution.maxAttempts` counts attempts whose work was rejected by verification or review, or reported `failed`. Blocked reports, interruptions, and agent or infrastructure errors (recorded as outcome `error`) do not count. Separately, `execution.maxInfraRetries` defaults to 1 automatic retry per task for PI timeouts, nonzero exits, empty or invalid event output, and prompt-send failures. This separate budget is persisted and survives resume, including operator retries; existing runs without a pinned value use zero. Other errors and exhausted infrastructure retries stop the run and require an approved resume.
 
+**Verification reruns.** A trusted verification command that fails is run again, up to `execution.verificationReruns` times (default 1, `0` disables, maximum 3). If the unchanged source then passes, the check is accepted and recorded with `flaky: true` and the failures of its first run; `status` reports tasks whose verification passed only on a rerun. A command that fails every run fails the attempt. This keeps load-related timeouts from spending the repair budget; it also means an intermittent real defect can pass, so treat recorded flaky checks as defects to fix.
+
+**Repair feedback.** A repair session does not receive raw attempt history. The factory builds a structured record from persisted state (`src/attempt-feedback.ts`): the `open` items of the latest attempt (failed commands with extracted failing tests and a `logFile` holding the full output under `.factory/runs/RUN_ID/logs/`, blocking review findings, UI evidence issues), earlier blocking findings that `mustStayFixed`, a one-line history, and the paths already changed. Reviewers of a repair get the same record and are instructed to verify earlier findings and to raise new blocking findings only for regressions or evidenced defects against an acceptance criterion.
+
 **Task size gate.** `plan`, `run`, `replan`, and `amend` reject a task with more than 5 acceptance criteria or a criterion longer than 300 characters. Plans of existing runs stay loadable.
+
+**Specification and plan review.** `plan` and `replan` send each plan to an independent, read-only plan reviewer (`agents/plan-reviewer.md`, model `agents.planReviewer`, default `agents.reviewer`) before saving it. The reviewer checks the objective for gaps and the plan for traceability to the objective, criteria that the configured verification commands cannot check, task size, and dependency order. Blocking findings go back to a fresh planner session; `planning.maxReviewRounds` (default 2, `0` disables) bounds the number of reviews. Findings that survive the last review are added to the plan as blocking decisions, so `run` refuses the plan until you resolve them: edit the plan or the objective, then set the decision's `blocking` to `false` or remove it. The reports are saved beside the plan as `NAME.review.json`. Plan review does not replace your own review before `run --approve`.
 
 **Objectives.** State a threat model and non-goals in the objective (see `examples/objective.md`). The planner must not assume an adversary that the objective does not name, and reviewers may block only on stated requirements or concrete defects.
 
@@ -175,12 +194,14 @@ Configure specialist models independently using the optional top-level `reviewer
 - **Code:** always required.
 - **Security:** auth, permissions, secrets, API, backend, data, and schema paths; also executable source, configuration, and unknown artifacts, including frontend source.
 - **UI/accessibility:** frontend/component/view paths, frontend extensions, WPF `.xaml`, and styles.
-- **Uncertainty:** ambiguous paths or no changed files require all enabled reviewers. Ordinary `.md`, `.txt`, and `.rst` documentation needs code only unless paths or task text indicate specialist scope.
+- **Uncertainty:** no changed files require all enabled reviewers. An unclassified path requires security review but not UI review: the UI reviewer is selected only by UI paths or UI task text. Ordinary `.md`, `.txt`, and `.rst` documentation needs code only unless paths or task text indicate specialist scope.
 - Task descriptions, acceptance criteria, and verification text may **add** specialists, never waive path-based requirements. Routing is heuristic and intentionally conservative, not proof that a change has no security or UI impact.
 
 Removing a specialist from `reviewers` disables that specialist for new work; routing only selects enabled specialists. Required IDs, changed paths, and routing reasons are persisted on the task and each reviewed attempt **before** reviewer invocation. Repairs and reloaded runs retain previous requirements and may add reviewers, but cannot drop them; disabling a previously required reviewer blocks acceptance. Report IDs must match the exact selected set.
 
 All selected reviewers must approve; actionable blocking findings trigger bounded repair attempts, and blocked or invalid reports prevent acceptance. Review reports and feedback use the existing persisted attempt history.
+
+Without a configured `uiEvidence` collector the UI reviewer works from source only and is told not to block for missing rendered evidence; it records what it could not verify as limitations. With a collector, rejected evidence (for example a failed interaction check) sends the task back for repair with the issues as feedback, within the normal repair budget.
 
 UI review supports desktop and web applications; browser evidence is not required for WPF. Specialists add model calls and latency; review currently runs sequentially.
 
