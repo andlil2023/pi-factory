@@ -99,6 +99,7 @@ export function projectRun(state: FactoryRunState) {
     runId: state.runId, label: displayString(label, 100) ?? state.runId, objectiveSummary: displayString(objective, 2000), createdAt: state.createdAt, updatedAt: state.updatedAt, status: state.status,
     deliveryStatus: latestIntegration?.status === 'published' ? 'integrated'
       : latestIntegration?.status === 'pr-opened' ? 'pr_opened'
+      : latestIntegration?.status === 'blocked' && state.status === 'running' ? 'running'
       : typeof latestIntegration?.status === 'string' ? 'integration_' + latestIntegration.status
       : state.status === 'completed' ? 'awaiting_integration' : state.status,
     maxAttempts: Number.isSafeInteger(state.execution?.maxAttempts) ? state.execution?.maxAttempts : undefined,

@@ -15,7 +15,7 @@ import { isDeepStrictEqual } from 'node:util';
 import type { ReviewRouting } from './review-routing.ts';
 import { validateUiEvidenceCommand, type UiEvidenceCommand } from './ui-evidence.ts';
 import { acquireRunLock } from './run-lock.ts';
-import { prepareIntegration, publishIntegration, publishPullRequest, reconcilePullRequest, hasGitRemote, type IntegrationOptions } from './git-integration.ts';
+import { assertCandidate, prepareIntegration, publishIntegration, publishPullRequest, reconcilePullRequest, hasGitRemote, type IntegrationOptions } from './git-integration.ts';
 import { captureRunGitState, configurationFingerprint, fingerprintForRun, prepareRunResume, validateRunGitState, assertRunCheckpoint, MAX_GUIDANCE_LENGTH } from './run-recovery.ts';
 import { amendRunPlan } from './plan-amendment.ts';
 import { reviewedPlan, planningContext, type PlanReviewReport, type ReviewedPlan } from './plan-review.ts';
@@ -25,6 +25,7 @@ import { validateSelectionConfig, type SelectionConfig } from './selection-confi
 import { DashboardReader } from './dashboard-reader.ts';
 import { diagnoseRepository } from './doctor-repository.ts';
 import { diagnoseRuns } from './doctor-runs.ts';
+import { addIntegrationRepair, integrationRepairEligible } from './integration-repair.ts';
 
 interface Config {
   /** `planReviewer` defaults to `reviewer`. */
@@ -36,8 +37,9 @@ interface Config {
   uiEvidence?: { command: UiEvidenceCommand };
   /** `maxAutoReplans`: plan revisions the factory may apply without an operator per run; 0 always stops. Default 2.
    * `maxFinalRepairs`: repair tasks added after a failed final verification; 0 blocks at once. Default 2.
+   * `maxIntegrationRepairs`: repair tasks added after a blocked integration; 0 disables repairs. Default 2.
    * `reuseVerification`: final verification and publication accept an earlier passing full verification of the identical content instead of rerunning it. Default true. */
-  execution?: { maxAttempts?: number; maxInfraRetries?: number; verificationReruns?: number; maxAutoReplans?: number; maxFinalRepairs?: number; reuseVerification?: boolean };
+  execution?: { maxAttempts?: number; maxInfraRetries?: number; verificationReruns?: number; maxAutoReplans?: number; maxFinalRepairs?: number; maxIntegrationRepairs?: number; reuseVerification?: boolean };
   verification?: Array<{ executable: string; args?: string[]; timeoutMs?: number }>;
   verificationSelection?: SelectionConfig;
   /** Trusted commands that prepare every fresh run or integration worktree, for example a dependency install. */
@@ -101,6 +103,8 @@ async function configFrom(flags:Record<string,string|boolean>):Promise<Config> {
   if (!Number.isSafeInteger(maxAutoReplans) || maxAutoReplans < 0 || maxAutoReplans > 10) throw new Error('Invalid execution.maxAutoReplans; use 0-10');
   const maxFinalRepairs = config.execution?.maxFinalRepairs ?? 2;
   if (!Number.isSafeInteger(maxFinalRepairs) || maxFinalRepairs < 0 || maxFinalRepairs > 5) throw new Error('Invalid execution.maxFinalRepairs; use 0-5');
+  const maxIntegrationRepairs = config.execution?.maxIntegrationRepairs === undefined ? 2 : config.execution.maxIntegrationRepairs;
+  if (!Number.isSafeInteger(maxIntegrationRepairs) || maxIntegrationRepairs < 0 || maxIntegrationRepairs > 5) throw new Error('Invalid execution.maxIntegrationRepairs; use 0-5');
   if (config.execution?.reuseVerification !== undefined && typeof config.execution.reuseVerification !== 'boolean') throw new Error('Invalid execution.reuseVerification; use true or false');
   const maxReviewRounds = config.planning?.maxReviewRounds ?? 2;
   if (!Number.isSafeInteger(maxReviewRounds) || maxReviewRounds < 0 || maxReviewRounds > 5) throw new Error('Invalid planning.maxReviewRounds; use 0-5');
@@ -524,7 +528,7 @@ async function integrateCommand(flags:Record<string,string|boolean>):Promise<voi
   try {
     const releaseRun=await acquireRunLock(store.directory,runId,flags['recover-lock']===true);
     try {
-      const state=await store.load(runId);
+      let state=await store.load(runId);
       if (await realpath(repository)!==await realpath(state.repository)) throw new Error('Run repository mismatch');
       const plan=await validator.validate<Plan>('plan',state.plan);
       if (!plan.valid || plan.value.decisions.some(decision=>decision.blocking)) throw new Error('Persisted plan is invalid or has unresolved blocking decisions');
@@ -548,9 +552,32 @@ async function integrateCommand(flags:Record<string,string|boolean>):Promise<voi
           verificationReruns:config.execution?.verificationReruns??1,logDirectory:join(store.directory,runId,'integration-logs',String(attempt)),
           uiEvidence:config.uiEvidence?{command:config.uiEvidence.command,directory:join(store.directory,runId,'integration-evidence',String(attempt))}:undefined})
       };
-      const record=flags.publish===true
+      let record=flags.publish===true
         ? await (await hasGitRemote(repository) ? publishPullRequest : publishIntegration)(store,state,options,required(flags,'candidate'))
         : await prepareIntegration(store,state,options,flags['new-attempt']===true);
+      const maxRepairs=config.execution?.maxIntegrationRepairs??2;
+      while (flags.publish!==true && integrationRepairEligible(state,record,maxRepairs)) {
+        const observed=await validateRunGitState(state,repository);
+        if (observed.targetHead!==record.targetHead) break;
+        // A rejection is evidence only for the candidate it was produced on. A check that changed the candidate voids it.
+        try { await assertCandidate(state,record); }
+        catch (error) { console.log(`Integration ${record.number} is not repaired automatically: its candidate failed the integrity check (${error instanceof Error?error.message.split('\n')[0]:'unknown error'})`); break; }
+        state=addIntegrationRepair(state,record,maxRepairs);
+        const repair=state.integrationRepairs!.at(-1)!;
+        await store.save(state);
+        const message=`Integration ${record.number} blocked; added repair task ${repair.taskId} (${state.integrationRepairs!.length} of ${maxRepairs})`;
+        const events=new FactoryEventBus({runId,logFile:join(repository,'.factory','runs',`${runId}.events.jsonl`)});
+        try { events.emit({type:'PLAN_REVISED',taskId:repair.taskId,message}); } finally { await events.close(); }
+        console.log(message);
+        await executeRun(store,state,config);
+        if (state.status!=='completed' || repair.withdrawn) break;
+        const revised=state.plan as Plan;
+        options.task={id:'T000',title:'Verify cumulative run integration',objective:revised.objective,
+          scope:revised.tasks.map(task=>`${task.id}: ${task.scope}`).join('\n'),
+          acceptanceCriteria:revised.tasks.flatMap(task=>task.acceptanceCriteria.map(criterion=>`${task.id}: ${criterion}`)),
+          dependencies:[],verification:revised.verification};
+        record=await prepareIntegration(store,state,options,true);
+      }
       console.log(`Integration ${record.number}: ${record.status}; worktree: ${record.worktree}`);
       if (record.commit) console.log(`Candidate: ${record.commit}`);
       if (record.pullRequest?.url) console.log(`Pull request: ${record.pullRequest.url}`);

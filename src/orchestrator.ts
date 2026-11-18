@@ -3,7 +3,7 @@ import { AgentExecutionError } from './agent-error.ts';
 import { appendReviewResult, reconcileReviewResults } from './review-results.ts';
 import type { ReviewSelection } from './review-routing.ts';
 import type { UiEvidenceRecord } from './ui-evidence.ts';
-import { buildAttemptFeedback, buildFinalFailureFeedback, type AttemptFeedback } from './attempt-feedback.ts';
+import { buildAttemptFeedback, buildFinalFailureFeedback, buildIntegrationFailureFeedback, type AttemptFeedback } from './attempt-feedback.ts';
 import { consumedAttempts, consumedInfraRetries, type FactoryRunState, type StateStore, type AttemptRecord, type ReviewVerdict, type VerificationProgress } from './state-store.ts';
 
 export interface PlannedTask {
@@ -200,7 +200,11 @@ export class Orchestrator {
         const structured = buildAttemptFeedback(taskState.attempts.slice(0, -1));
         if (structured) context.feedback = structured;
         const finalRepair = state.finalRepairs?.find(repair => repair.taskId === ready.id);
-        if (finalRepair) {
+        const integrationRepair = state.integrationRepairs?.find(repair => repair.taskId === ready.id);
+        if (integrationRepair) {
+          context.fullVerification = true;
+          context.feedback = buildIntegrationFailureFeedback(state, ready.id, taskState.attempts.slice(0, -1));
+        } else if (finalRepair) {
           context.fullVerification = true;
           // Until an attempt of the repair itself produces failed checks or findings, the open items are those of the
           // failed final verification. An attempt that only timed out or crashed must not hide them.
@@ -241,8 +245,8 @@ export class Orchestrator {
             if (!verification.passed) {
               taskState.status = 'repair_pending';
               taskState.lastError = 'Deterministic verification failed';
-            } else if (finalRepair && this.adapters.hasChanges && !(await this.adapters.hasChanges(context))) {
-              // Every trusted command passes and nothing was changed: the final failure did not reproduce.
+            } else if ((finalRepair || integrationRepair) && this.adapters.hasChanges && !(await this.adapters.hasChanges(context))) {
+              // Every trusted command passes and nothing was changed: there is no repair to commit.
               // There is nothing to review or commit, so the repair is withdrawn below and final verification runs again.
               withdrawn = true;
               taskState.status = 'completed';
@@ -334,7 +338,9 @@ export class Orchestrator {
         }
       }
       if (withdrawn) {
-        const repair = state.finalRepairs!.find(entry => entry.taskId === ready.id)!;
+        const integrationRepair = state.integrationRepairs?.find(entry => entry.taskId === ready.id);
+        const repair = integrationRepair ?? state.finalRepairs?.find(entry => entry.taskId === ready.id);
+        if (!repair) throw new Error(`Missing repair entry for ${ready.id}`);
         repair.withdrawn = true;
         const now = new Date().toISOString();
         state.planRevisions = [...(state.planRevisions ?? []), { replacedAt: now, plan: structuredClone(state.plan) }];
@@ -344,7 +350,7 @@ export class Orchestrator {
         ids.delete(ready.id);
         delete state.tasks[ready.id];
         // Attempt history is evidence; the ID is retired like any superseded task.
-        state.supersededTasks = [...(state.supersededTasks ?? []), { supersededAt: now, task: { ...taskState, status: 'blocked', lastError: 'Final verification failure did not reproduce; no repair was needed' } }];
+        state.supersededTasks = [...(state.supersededTasks ?? []), { supersededAt: now, task: { ...taskState, status: 'blocked', lastError: integrationRepair ? 'Integration rejection did not reproduce; no repair was needed' : 'Final verification failure did not reproduce; no repair was needed' } }];
         this.options.events?.emit({type:'PLAN_REVISED',taskId:ready.id,message:`Withdrew repair task ${ready.id}: every trusted command passed without changes`});
         await this.store.save(state);
         continue;

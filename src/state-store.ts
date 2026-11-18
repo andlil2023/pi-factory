@@ -107,6 +107,8 @@ export interface FactoryRunState {
   supersededTasks?: Array<{ supersededAt: string; task: TaskState }>;
   /** Plan revisions the factory applied without an operator; bounded by execution.maxAutoReplans. */
   autoReplans?: Array<{ at: string; taskId: string; reason: 'task_too_large' | 'budget_exhausted'; superseded: string[]; added: string[]; leftoverPatch?: string }>;
+  /** Repairs of rejected integration candidates, referencing the persisted attempt rather than copying its feedback. */
+  integrationRepairs?: Array<{ at: string; taskId: string; integrationAttempt: number; withdrawn?: boolean }>;
   finalVerificationProgress?: VerificationProgress & { startedAt?: string };
   finalVerification?: { passed: boolean; details: unknown; checkedAt: string; head?: string };
   /** Repair tasks added after a failed final verification; bounded by execution.maxFinalRepairs. */

@@ -15,15 +15,16 @@ async function git(cwd: string, args: string[]): Promise<string> {
 /**
  * Identifies the configuration a run was started with. Time limits (`timeoutMs`) are excluded:
  * they bound how long a step may take, not what it does, so an operator may change them between resumes.
- * `includeTimeouts` reproduces the fingerprint of runs started before that exclusion.
+ * The integration repair budget is also excluded so it may be changed for existing runs.
+ * `includeTimeouts` reproduces the fingerprint of runs started before the timeout exclusion.
  */
 export function configurationFingerprint(config: unknown, includeTimeouts = false): string {
-  const normalize = (value: unknown): unknown => {
-    if (Array.isArray(value)) return value.map(normalize);
-    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).filter(([key]) => includeTimeouts || key !== 'timeoutMs').sort(([a], [b]) => a.localeCompare(b)).map(([key, child]) => [key, normalize(child)]));
+  const normalize = (value: unknown, path: string[]): unknown => {
+    if (Array.isArray(value)) return value.map(child => normalize(child, [...path, '[]']));
+    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).filter(([key]) => !(path.length === 1 && path[0] === 'execution' && key === 'maxIntegrationRepairs') && (includeTimeouts || key !== 'timeoutMs')).sort(([a], [b]) => a.localeCompare(b)).map(([key, child]) => [key, normalize(child, [...path, key])]));
     return value;
   };
-  return createHash('sha256').update(JSON.stringify(normalize(config))).digest('hex');
+  return createHash('sha256').update(JSON.stringify(normalize(config, []))).digest('hex');
 }
 
 /** The fingerprint to compare with a persisted run: the older, timeout-sensitive form when that is what the run recorded. */
