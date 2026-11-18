@@ -60,6 +60,19 @@ test('infrastructure errors after a rejected attempt keep the rejected findings 
   assert.ok(feedback.notes.some(note => /Attempt 2: reviewer process failed/.test(note) && /Inspect the worktree/.test(note)));
 });
 
+test('findings stay open until a later review has judged them', () => {
+  // Attempt 2 never reached review, so nobody confirmed that attempt 1's finding was fixed.
+  const feedback = buildAttemptFeedback([
+    attempt(1, { verification: { passed: true, details: {} }, reviews: [review('code', 'changes_requested', [finding('UNCONFIRMED_FIX')])] }),
+    attempt(2, { verification: { passed: false, details: { checks: [{ command: 'test', passed: false, stdout: 'not ok 1 - broke', stderr: '' }] } } })
+  ])!;
+  assert.equal(feedback.open.attempt, 2);
+  assert.equal(feedback.open.reason, 'Deterministic verification failed');
+  assert.deepEqual(feedback.open.failedChecks[0].failures, ['not ok 1 - broke']);
+  assert.deepEqual(feedback.open.findings.map(f => [f.attempt, f.description]), [[1, 'UNCONFIRMED_FIX']]);
+  assert.deepEqual(feedback.mustStayFixed, []);
+});
+
 test('blocked, failed and UI evidence results are open items', () => {
   const blocked = buildAttemptFeedback([attempt(1, { outcome: 'blocked', implementationReport: { summary: 'stuck', blockers: [{ kind: 'decision_needed', description: 'Need policy', question: 'Which?' }] } })])!;
   assert.deepEqual(blocked.open.blockers, [{ kind: 'decision_needed', description: 'Need policy', question: 'Which?' }]);

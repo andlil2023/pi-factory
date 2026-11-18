@@ -203,10 +203,13 @@ export class Orchestrator {
                 attempt.uiEvidence = uiEvidence;
                 context.uiEvidence = uiEvidence;
                 await this.store.save(state);
-                evidenceRejected = !uiEvidence.passed;
+                // Failed interaction or accessibility checks are a result of the work, like a failed test.
+                // A collector that crashed, timed out or wrote invalid evidence is an environment problem: stop for the operator.
+                evidenceRejected = !uiEvidence.passed && (uiEvidence.manifest?.checks ?? []).some(check => check.status === 'failed');
+                if (!uiEvidence.passed && !evidenceRejected) throw new Error(`UI evidence rejected: ${uiEvidence.issues.join('; ')}`);
               }
               if (evidenceRejected) {
-                // Rejected evidence is a result of the work, like a failed test: repair within the budget, with the issues as feedback.
+                // Repair within the budget, with the failed checks as feedback.
                 taskState.status = 'repair_pending';
                 taskState.lastError = `UI evidence rejected: ${attempt.uiEvidence!.issues.join('; ')}`;
               } else {

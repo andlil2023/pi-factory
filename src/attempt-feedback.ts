@@ -18,7 +18,7 @@ export interface FailedCheck {
   logFile?: string;
 }
 export interface AttemptFeedback {
-  /** Unresolved results of the most recent attempt that produced any. */
+  /** Unresolved results of the most recent attempt that produced any. `findings` come from the last reviewed attempt, which may be earlier. */
   open: {
     attempt: number;
     reason: string;
@@ -28,7 +28,7 @@ export interface AttemptFeedback {
     implementerSummary?: string;
     blockers?: unknown[];
   };
-  /** Blocking findings of earlier attempts. They were addressed once; a repair must not reintroduce them. */
+  /** Blocking findings from before the last reviewed attempt. A later review did not repeat them; a repair must not reintroduce them. */
   mustStayFixed: FeedbackFinding[];
   /** One line per previous attempt, oldest first. */
   history: Array<{ attempt: number; result: string }>;
@@ -127,6 +127,8 @@ const substantive = (attempt: AttemptRecord): boolean => attempt.outcome === 'bl
 export function buildAttemptFeedback(previous: AttemptRecord[]): AttemptFeedback | undefined {
   if (!previous.length) return undefined;
   const latest = [...previous].reverse().find(substantive) ?? previous[previous.length - 1];
+  // A finding is settled only by a later review. Until one happens, the last reviewed attempt's findings stay open.
+  const reviewed = [...previous].reverse().find(attempt => attempt.reviews?.length);
   const report = record(latest.implementationReport);
   const reported = latest.outcome !== 'implemented';
   const notes = previous.flatMap(attempt => [
@@ -136,11 +138,11 @@ export function buildAttemptFeedback(previous: AttemptRecord[]): AttemptFeedback
   return {
     open: {
       attempt: latest.number, reason: reason(latest),
-      failedChecks: failedChecks(latest), findings: blockingFindings(latest), uiEvidenceIssues: uiEvidenceIssues(latest),
+      failedChecks: failedChecks(latest), findings: reviewed ? blockingFindings(reviewed) : [], uiEvidenceIssues: uiEvidenceIssues(latest),
       ...(reported && text(report.summary) ? { implementerSummary: text(report.summary) } : {}),
       ...(reported && Array.isArray(report.blockers) && report.blockers.length ? { blockers: report.blockers } : {})
     },
-    mustStayFixed: previous.filter(attempt => attempt.number < latest.number).flatMap(blockingFindings),
+    mustStayFixed: previous.filter(attempt => reviewed !== undefined && attempt.number < reviewed.number).flatMap(blockingFindings),
     history: previous.map(attempt => ({ attempt: attempt.number, result: summary(attempt) })),
     notes
   };

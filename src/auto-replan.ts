@@ -1,7 +1,8 @@
 import { execFile } from 'node:child_process';
-import { mkdir, realpath, writeFile } from 'node:fs/promises';
+import { mkdir, realpath, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
+import { isDeepStrictEqual, promisify } from 'node:util';
+import type { PlannedTask } from './orchestrator.ts';
 import { assertCheckoutCheckpoint } from './run-recovery.ts';
 import { consumedAttempts, type FactoryRunState, type GitExecutionState } from './state-store.ts';
 
@@ -34,25 +35,70 @@ export function autoReplanCandidate(state: FactoryRunState, maxAttempts: number,
 }
 
 /**
- * Save the uncommitted edits of a superseded task as a patch, then reset the run worktree to its checkpoint.
- * Destructive, so it is confined to the factory-owned run worktree on its expected branch and commit;
- * ignored files (installed dependencies) are kept. Returns the patch path, or undefined when the worktree was clean.
+ * Deterministic limits on a plan revision that no operator will read before it runs.
+ * The revision may only replace the stopped task: it cannot drop or rewrite other work,
+ * and every acceptance criterion of the stopped task must survive verbatim in a replacement.
  */
-export async function stashLeftover(repository: string, git: GitExecutionState, directory: string, name: string): Promise<string | undefined> {
-  if (!/^[A-Za-z0-9_-]+$/.test(name)) throw new Error('Invalid leftover name');
+export function assertReplacementPlan(current: { objective?: unknown; tasks: PlannedTask[] }, revised: { objective?: unknown; tasks: PlannedTask[] }, taskId: string): void {
+  if (!isDeepStrictEqual(current.objective, revised.objective)) throw new Error('the revision changes the objective');
+  const stopped = current.tasks.find(task => task.id === taskId);
+  if (!stopped) throw new Error(`${taskId} is not in the current plan`);
+  const next = new Map(revised.tasks.map(task => [task.id, task]));
+  if (next.has(taskId)) throw new Error(`the planner kept ${taskId}`);
+  for (const task of current.tasks) {
+    if (task.id === taskId) continue;
+    const kept = next.get(task.id);
+    if (!kept) throw new Error(`the revision removes ${task.id}`);
+    // Dependents of the stopped task must be re-pointed; nothing else about another task may change.
+    if (!isDeepStrictEqual({ ...kept, dependencies: [] }, { ...task, dependencies: [] })) throw new Error(`the revision changes ${task.id}`);
+  }
+  const known = new Set(current.tasks.map(task => task.id));
+  const added = revised.tasks.filter(task => !known.has(task.id));
+  if (!added.length) throw new Error(`the revision adds no replacement for ${taskId}`);
+  const carried = new Set(added.flatMap(task => task.acceptanceCriteria));
+  const dropped = stopped.acceptanceCriteria.filter(criterion => !carried.has(criterion));
+  if (dropped.length) throw new Error(`the replacement tasks drop or reword ${dropped.length} acceptance criterion/criteria of ${taskId}`);
+}
+
+async function ownedWorktree(repository: string, git: GitExecutionState): Promise<{ worktree: string; dirty: boolean }> {
   const worktree = await realpath(git.worktree);
   if (worktree === await realpath(repository)) throw new Error('Refusing to reset the source repository checkout');
   if (!git.runBranch.startsWith('factory/')) throw new Error('Refusing to reset a branch the factory does not own');
-  if (!await assertCheckoutCheckpoint(worktree, git.runBranch, git.expectedHead, true)) return undefined;
-  const run = (args: string[]) => exec('git', args, { cwd: worktree, windowsHide: true, maxBuffer: 256 * 1024 * 1024 });
-  // Staging everything makes untracked files part of the patch.
-  await run(['add', '-A']);
-  const { stdout } = await run(['diff', '--cached', '--binary', '--no-ext-diff', 'HEAD']);
+  return { worktree, dirty: await assertCheckoutCheckpoint(worktree, git.runBranch, git.expectedHead, true) };
+}
+const gitIn = (worktree: string, args: string[]) => exec('git', args, { cwd: worktree, windowsHide: true, maxBuffer: 16 * 1024 * 1024 });
+
+/**
+ * Save the uncommitted edits of the run worktree, tracked and untracked, as a binary-safe patch.
+ * Changes no file content. Returns the patch path, or undefined when the worktree is clean.
+ */
+export async function saveLeftoverPatch(repository: string, git: GitExecutionState, directory: string, name: string): Promise<string | undefined> {
+  if (!/^[A-Za-z0-9_-]+$/.test(name)) throw new Error('Invalid leftover name');
+  const { worktree, dirty } = await ownedWorktree(repository, git);
+  if (!dirty) return undefined;
   await mkdir(directory, { recursive: true });
   const patch = join(directory, `${name}.patch`);
-  await writeFile(patch, stdout, { flag: 'wx' });
-  await run(['reset', '--hard', 'HEAD']);
-  await run(['clean', '-fd']);
-  if (await assertCheckoutCheckpoint(worktree, git.runBranch, git.expectedHead, true)) throw new Error('Run worktree is still dirty after reset');
+  let exists = true;
+  try { await stat(patch); } catch { exists = false; }
+  if (exists) throw new Error('Leftover patch already exists');
+  // Staging everything makes untracked files part of the patch. Git writes the file itself: no text decoding of the bytes.
+  await gitIn(worktree, ['add', '-A']);
+  try { await gitIn(worktree, ['diff', '--cached', '--binary', '--no-ext-diff', `--output=${patch}`, 'HEAD']); }
+  finally { await gitIn(worktree, ['reset', '--quiet', 'HEAD']); }
+  if ((await stat(patch)).size === 0) throw new Error('Leftover patch is empty although the worktree is dirty');
   return patch;
 }
+
+/**
+ * Reset the run worktree to its checkpoint. Destructive, so it is confined to the factory-owned run worktree
+ * on its expected branch and commit; ignored files (installed dependencies) are kept.
+ * Call only after saveLeftoverPatch returned for the same state.
+ */
+export async function resetRunWorktree(repository: string, git: GitExecutionState): Promise<void> {
+  const { worktree, dirty } = await ownedWorktree(repository, git);
+  if (!dirty) return;
+  await gitIn(worktree, ['reset', '--hard', 'HEAD']);
+  await gitIn(worktree, ['clean', '-fd']);
+  if (await assertCheckoutCheckpoint(worktree, git.runBranch, git.expectedHead, true)) throw new Error('Run worktree is still dirty after reset');
+}
+
