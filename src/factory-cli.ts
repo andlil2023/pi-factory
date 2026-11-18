@@ -28,6 +28,7 @@ import { diagnoseRepository } from './doctor-repository.ts';
 import { diagnoseRuns } from './doctor-runs.ts';
 import { addIntegrationRepair, integrationRepairEligible } from './integration-repair.ts';
 import { initialize } from './init.ts';
+import { createDashboardServer } from './dashboard-server.ts';
 
 interface Config {
   /** `planReviewer` defaults to `reviewer`. */
@@ -650,6 +651,15 @@ async function main():Promise<void> {
     if (flags.force !== undefined && flags.force !== true) throw new Error('--force does not take a value');
     return initialize(required(flags,'repo'), flags.force === true);
   }
+  if(command==='dashboard') {
+    for (const name of Object.keys(flags)) if (name !== 'repo' && name !== 'port') throw new Error(`Unknown dashboard option: --${name}`);
+    const repository=resolve(required(flags,'repo'));
+    const portArg=flags.port === undefined ? '3000' : required(flags,'port');
+    const port=Number(portArg);
+    if (!/^\d+$/.test(portArg) || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid --port; use 1-65535');
+    createDashboardServer(repository).listen(port, '127.0.0.1', () => console.log(`Dashboard: http://127.0.0.1:${port}/`));
+    return;
+  }
   if(command==='doctor') return doctorCommand(flags);
   if(command==='plan') return planCommand(flags);
   if(command==='run') return runCommand(flags);
@@ -659,7 +669,7 @@ async function main():Promise<void> {
   if(command==='replan') return replanCommand(flags);
   if(command==='amend') return amendCommand(flags);
   if(command==='integrate') return integrateCommand(flags);
-  console.log('Usage:\n  pi-factory init --repo PATH [--force]\n  pi-factory doctor [--config FILE] [--repo PATH]\n  pi-factory run-list --repo PATH\n  pi-factory plan --repo PATH --config FILE --objective FILE --output FILE\n  pi-factory run --repo PATH --config FILE --plan FILE --approve\n  pi-factory status --repo PATH --run RUN_ID\n  pi-factory resume --repo PATH --config FILE --run RUN_ID --approve [--retry-task TASK_ID [--guidance FILE]] [--recover-lock]\n  pi-factory replan --repo PATH --config FILE --run RUN_ID --output FILE [--guidance FILE]\n  pi-factory amend --repo PATH --run RUN_ID --plan FILE --approve\n  pi-factory integrate --repo PATH --config FILE --run RUN_ID --approve [--new-attempt] [--guidance FILE]\n  pi-factory integrate --repo PATH --config FILE --run RUN_ID --publish --candidate SHA --approve\n  pi-factory integrate --repo PATH --run RUN_ID --reconcile [--recover-lock]');
+  console.log('Usage:\n  pi-factory init --repo PATH [--force]\n  pi-factory dashboard --repo PATH [--port PORT]\n  pi-factory doctor [--config FILE] [--repo PATH]\n  pi-factory run-list --repo PATH\n  pi-factory plan --repo PATH --config FILE --objective FILE --output FILE\n  pi-factory run --repo PATH --config FILE --plan FILE --approve\n  pi-factory status --repo PATH --run RUN_ID\n  pi-factory resume --repo PATH --config FILE --run RUN_ID --approve [--retry-task TASK_ID [--guidance FILE]] [--recover-lock]\n  pi-factory replan --repo PATH --config FILE --run RUN_ID --output FILE [--guidance FILE]\n  pi-factory amend --repo PATH --run RUN_ID --plan FILE --approve\n  pi-factory integrate --repo PATH --config FILE --run RUN_ID --approve [--new-attempt] [--guidance FILE]\n  pi-factory integrate --repo PATH --config FILE --run RUN_ID --publish --candidate SHA --approve\n  pi-factory integrate --repo PATH --run RUN_ID --reconcile [--recover-lock]');
   if(command && command !== '--help' && command !== 'help') process.exitCode=1;
 }
 main().catch(e=>{console.error(e instanceof Error?e.stack:e);process.exitCode=1;});
