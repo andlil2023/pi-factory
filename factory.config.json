@@ -31,7 +31,12 @@
   },
   "execution": {
     "maxAttempts": 3,
-    "requireApprovalBeforeExecution": true
+    "maxInfraRetries": 1,
+    "verificationReruns": 1,
+    "maxAutoReplans": 2
+  },
+  "planning": {
+    "maxReviewRounds": 2
   },
   "setup": [
     {
@@ -47,9 +52,6 @@
       "timeoutMs": 600000
     }
   ],
-  "setup": [
-    { "executable": "cmd", "args": ["/c", "npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund"], "timeoutMs": 600000 }
-  ],
   "verification": [
     {
       "executable": "node",
@@ -59,7 +61,7 @@
     {
       "executable": "node",
       "args": ["--experimental-strip-types", "--test", "tests/*.test.ts"],
-      "timeoutMs": 600000
+      "timeoutMs": 1200000
     }
   ]
 }

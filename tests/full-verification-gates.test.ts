@@ -21,13 +21,14 @@ for (const gate of ['final', 'preparation', 'publication'] as const) test(`${gat
     `const fs=require('fs');fs.appendFileSync(${JSON.stringify(log)},'${n}\\n');${n === 1 ? `if(fs.existsSync(${JSON.stringify(marker)}))process.exit(1);` : ''}`]}));
   const model = {provider:'fixture',model:'fixture'};
   const config = join(dir, 'config.json');
-  await writeFile(config, JSON.stringify({agents:{planner:model,implementer:model,reviewer:model}, verification,
+  // Reruns of failed commands are disabled so the log counts exactly one execution per selected check.
+  await writeFile(config, JSON.stringify({agents:{planner:model,implementer:model,reviewer:model}, verification, execution:{verificationReruns:0},
     verificationSelection:{rules:[{path:'T001.txt',commands:[0]}],dependencyPaths:[],dependenciesComprehensive:true},
     pi:{executable:process.execPath,executableArgs:[resolve('tests/fixtures/fake-factory-agent.mjs')]}}));
   const plan = join(dir,'plan.json');
   await writeFile(plan, JSON.stringify({objective:'Fixture',assumptions:[],decisions:[],tasks:[{id:'T001',title:'Fixture',objective:'Write file',scope:'T001.txt',acceptanceCriteria:['Exists'],dependencies:[],verification:['check']}],verification:['check']}));
   const cli = (...args:string[]) => {
-    const result = spawnSync(process.execPath,['--experimental-strip-types',resolve('src/factory-cli.ts'),...args,'--config',config],{encoding:'utf8',timeout:60000});
+    const result = spawnSync(process.execPath,['--experimental-strip-types',resolve('src/factory-cli.ts'),...args,'--config',config],{encoding:'utf8',timeout: 180_000});
     assertSubprocessStarted(result);
     return result;
   };

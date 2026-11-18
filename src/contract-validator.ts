@@ -5,7 +5,7 @@ import type { ErrorObject, ValidateFunction } from "ajv";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
-export type ContractName = "plan" | "implementation" | "review" | "ui-evidence";
+export type ContractName = "plan" | "plan-review" | "implementation" | "review" | "ui-evidence";
 export type ValidationIssue = {
   stage: "json" | "schema" | "semantic";
   path: string;
@@ -17,6 +17,7 @@ export type ValidationResult<T = unknown> =
 
 const CONTRACTS: Record<ContractName, string> = {
   plan: "plan.schema.json",
+  "plan-review": "plan-review.schema.json",
   implementation: "implementation.schema.json",
   review: "review.schema.json",
   "ui-evidence": "ui-evidence.schema.json",
@@ -155,7 +156,7 @@ function validateSemantics(
     if (report.verdict === "blocked" && report.limitations.length === 0) add("/limitations", "Blocked review must explain its limitation");
   }
 
-  if (contract !== "plan") {
+  if (contract !== "plan" && contract !== "plan-review") {
     const report = value as Implementation | Review;
     if (options.expectedTaskId && report.taskId !== options.expectedTaskId) add("/taskId", "Report task ID does not match assigned task");
   }

@@ -9,9 +9,14 @@ const route = (paths: string[], override = task) => selectTaskReviewers(override
 
 test('all mode and unknown scope require every enabled reviewer', () => {
   assert.deepEqual(selectTaskReviewers(task, ['README.md'], enabled).requiredReviewers, enabled);
-  for (const paths of [[], ['src/worker.ts'], ['package.json'], ['diagram.svg'], ['mystery.bin']]) {
-    assert.deepEqual(route(paths).requiredReviewers, enabled);
+  assert.deepEqual(route([]).requiredReviewers, enabled);
+});
+
+test('unclassified paths require security but not the UI reviewer', () => {
+  for (const paths of [['src/worker.ts'], ['package.json'], ['diagram.svg'], ['mystery.bin']]) {
+    assert.deepEqual(route(paths).requiredReviewers, ['code', 'security'], paths[0]);
   }
+  assert.deepEqual(route(['src/worker.ts'], { ...task, scope: 'Update the dashboard layout' }).requiredReviewers, enabled);
 });
 
 test('ordinary documentation needs code only', () => {
@@ -41,6 +46,6 @@ test('selection is deterministic, records evidence, and only selects enabled spe
   const selection = route(['README.md', 'src/api/server.ts', 'README.md']);
   assert.deepEqual(selection.changedFiles, ['README.md', 'src/api/server.ts']);
   assert.ok(selection.reasons.some(reason => reason.includes('src/api/server.ts')));
-  assert.deepEqual(selectTaskReviewers(task, ['src/unknown.ts'], ['code', 'ui'], 'task-specific').requiredReviewers, ['code', 'ui']);
+  assert.deepEqual(selectTaskReviewers(task, ['src/unknown.ts'], ['code', 'ui'], 'task-specific').requiredReviewers, ['code']);
   assert.throws(() => selectTaskReviewers(task, [], enabled, 'typo' as 'all'), /Invalid reviewRouting/);
 });

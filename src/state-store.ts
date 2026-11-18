@@ -99,6 +99,8 @@ export interface FactoryRunState {
   planRevisions?: Array<{ replacedAt: string; plan: unknown }>;
   /** Tasks removed by an amendment; their attempt history is evidence. */
   supersededTasks?: Array<{ supersededAt: string; task: TaskState }>;
+  /** Plan revisions the factory applied without an operator; bounded by execution.maxAutoReplans. */
+  autoReplans?: Array<{ at: string; taskId: string; reason: 'task_too_large' | 'budget_exhausted'; superseded: string[]; added: string[]; leftoverPatch?: string }>;
   finalVerificationProgress?: VerificationProgress;
   finalVerification?: { passed: boolean; details: unknown; checkedAt: string; head?: string };
   tasks: Record<string, TaskState>;

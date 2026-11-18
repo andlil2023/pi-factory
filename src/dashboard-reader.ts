@@ -8,7 +8,7 @@ const runIdPattern = /^[a-zA-Z0-9_-]+$/;
 const runStatuses = ['planned', 'running', 'paused', 'completed', 'blocked'];
 const taskStatuses = ['pending', 'running', 'needs_review', 'repair_pending', 'completed', 'blocked'];
 const outcomes = ['implemented', 'failed', 'blocked', 'interrupted', 'error'];
-const eventTypes = new Set(['RUN_STARTED', 'RUN_COMPLETED', 'RUN_BLOCKED', 'TASK_STARTED', 'TASK_COMPLETED', 'TASK_BLOCKED', 'AGENT_STARTED', 'AGENT_COMPLETED', 'AGENT_FAILED', 'VERIFICATION_PASSED', 'VERIFICATION_FAILED', 'REVIEW_APPROVED', 'REVIEW_CHANGES_REQUESTED', 'REVIEW_BLOCKED', 'REPAIR_STARTED', 'CHECKPOINT_CREATED', 'FINAL_VERIFICATION_PASSED', 'FINAL_VERIFICATION_FAILED']);
+const eventTypes = new Set(['RUN_STARTED', 'RUN_COMPLETED', 'RUN_BLOCKED', 'TASK_STARTED', 'TASK_COMPLETED', 'TASK_BLOCKED', 'AGENT_STARTED', 'AGENT_COMPLETED', 'AGENT_FAILED', 'VERIFICATION_PASSED', 'VERIFICATION_FAILED', 'REVIEW_APPROVED', 'REVIEW_CHANGES_REQUESTED', 'REVIEW_BLOCKED', 'REPAIR_STARTED', 'CHECKPOINT_CREATED', 'FINAL_VERIFICATION_PASSED', 'FINAL_VERIFICATION_FAILED', 'PLAN_REVISED']);
 
 function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);

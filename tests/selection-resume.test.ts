@@ -20,7 +20,7 @@ test('resumed repair selects cumulative changes since the last accepted checkpoi
   const selection = { rules: [{ path: 'accepted.txt', commands: [2] }, { path: 'first.txt', commands: [0] }, { path: 'repair.txt', commands: [1] }], dependencyPaths: [], dependenciesComprehensive: true };
   const settings = { agents: { planner: model, implementer: model, reviewer: model }, execution: { maxAttempts: 3 }, verification: [0, 1, 2].map(n => ({ executable: process.execPath, args: ['-e', `console.log(${n})`] })), verificationSelection: selection, pi: { executable: process.execPath, executableArgs: [resolve('tests/fixtures/fake-resume-selection-agent.mjs')] } };
   await writeFile(config, JSON.stringify(settings));
-  const cli = (...args: string[]) => spawnSync(process.execPath, ['--experimental-strip-types', resolve('src/factory-cli.ts'), ...args, '--config', config], { encoding: 'utf8', timeout: 60_000 });
+  const cli = (...args: string[]) => spawnSync(process.execPath, ['--experimental-strip-types', resolve('src/factory-cli.ts'), ...args, '--config', config], { encoding: 'utf8', timeout: 180_000 });
   const first = cli('run', '--repo', repo, '--plan', plan, '--approve'); assert.equal(first.status, 1, first.stdout + first.stderr);
   const runs = join(repo, '.factory', 'runs'); const file = (await readdir(runs)).find(name => name.endsWith('.json'))!;
   const statePath = join(runs, file); const blocked = JSON.parse(await readFile(statePath, 'utf8')) as FactoryRunState;

@@ -14,6 +14,16 @@ Security requirements come from the objective's stated threat model and non-goal
 
 Each task must fit one fresh implementer session: one cohesive change that a competent engineer completes and tests in under an hour. The factory rejects a plan in which a task has more than 5 acceptance criteria or a criterion longer than 300 characters. State one checkable behavior per criterion. If a task needs more, split it into dependent tasks; do not compress several requirements into one criterion. Verification steps must be runnable in the implementer's environment.
 
-When revising the plan of a stopped run, follow the rules given in the prompt and change only what the blockers and operator guidance require.
+## Verifiability
+
+The prompt describes the factory verification environment: the trusted commands that decide whether a task is accepted, and whether rendered UI evidence exists. Reviewers read code and those results; they cannot run anything. Write every acceptance criterion so that it is checkable by those commands (including tests the implementer adds), or by reading the code. Do not write criteria that need a manual experiment, a human observation, an external service, or screenshots when no UI evidence collector is configured. If the objective requires something the factory cannot verify, record it as a blocking decision instead of a criterion.
+
+Order tasks so that each one passes the trusted commands on its own: a task must not depend on code from a later task.
+
+## Review
+
+An independent reviewer checks the plan against the objective before it is saved. When the prompt contains review findings, resolve each one by changing the plan, without adding scope. For a specification gap, add a decision with `blocking: true` that asks the question; do not answer it yourself.
+
+When revising the plan of a stopped run, follow the rules given in the prompt and change only what the blockers and the guidance require. Task states include structured feedback from failed attempts: use it to make replacement tasks smaller or more precise, and name the known failure causes in their scope.
 
 Return ONLY a JSON object matching `contracts/plan.schema.json`, without markdown fences or commentary. Do not implement anything.

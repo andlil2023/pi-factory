@@ -29,7 +29,7 @@ test('CLI replans a too-large task, amends the stopped run with approval, and co
   };
   const config = join(dir, 'config.json');
   const model = { provider: 'fixture', model: 'fixture' };
-  await writeFile(config, JSON.stringify({ agents: { planner: model, implementer: model, reviewer: model }, execution: { maxAttempts: 3 }, verification: [{ executable: process.execPath, args: ['-e', 'process.exit(0)'] }], pi: { executable: process.execPath, executableArgs: [resolve('tests/fixtures/fake-replan-agent.mjs')] } }));
+  await writeFile(config, JSON.stringify({ agents: { planner: model, implementer: model, reviewer: model }, execution: { maxAttempts: 3, maxAutoReplans: 0 }, planning: { maxReviewRounds: 0 }, verification: [{ executable: process.execPath, args: ['-e', 'process.exit(0)'] }], pi: { executable: process.execPath, executableArgs: [resolve('tests/fixtures/fake-replan-agent.mjs')] } }));
   // Measured run/resume took 55.5/58.0 seconds in the full suite versus
   // 5.3/16.1 seconds isolated. Allow roughly twice that observed suite time.
   const runCli = (...args: string[]) => {
