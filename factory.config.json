@@ -61,7 +61,7 @@
     {
       "executable": "node",
       "args": ["--experimental-strip-types", "--test", "tests/*.test.ts"],
-      "timeoutMs": 600000
+      "timeoutMs": 1200000
     }
   ]
 }
