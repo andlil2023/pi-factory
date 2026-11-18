@@ -20,6 +20,8 @@ export function autoReplanCandidate(state: FactoryRunState, maxAttempts: number,
   const stopped = Object.values(state.tasks).filter(task => task.status !== 'completed' && task.status !== 'pending');
   if (stopped.length !== 1 || stopped[0].status !== 'blocked') return undefined;
   const task = stopped[0];
+  // A final-verification repair has its own budget; replanning it would only add time.
+  if (state.finalRepairs?.some(repair => repair.taskId === task.id)) return undefined;
   const last = task.attempts.at(-1);
   if (!last) return undefined;
   if (last.outcome === 'blocked') {

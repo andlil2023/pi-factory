@@ -4,8 +4,8 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import type { FactoryRunState } from '../src/state-store.ts';
-import { assertSubprocessStarted, subprocessDiagnostics } from './subprocess-diagnostics.ts';
+import type { FactoryRunState } from '../../src/state-store.ts';
+import { assertSubprocessStarted, subprocessDiagnostics } from '../subprocess-diagnostics.ts';
 
 const cli = resolve('src/factory-cli.ts');
 test('CLI replans a too-large task, amends the stopped run with approval, and completes it', async t => {

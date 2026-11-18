@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { lstat, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { acquireRunLock } from '../src/run-lock.ts';
+import { acquireRunLock } from '../../src/run-lock.ts';
 
 async function fixture(t: import('node:test').TestContext) {
   const directory = await mkdtemp(join(tmpdir(), 'factory-lock-'));

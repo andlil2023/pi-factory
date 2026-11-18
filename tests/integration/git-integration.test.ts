@@ -4,12 +4,12 @@ import { execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { createAgentAdapters } from '../src/agent-adapters.ts';
-import { StateStore } from '../src/state-store.ts';
-import { createWorktree } from '../src/git-worktree.ts';
-import { createGitCheckpoint } from '../src/git-checkpoint.ts';
-import { captureRunGitState } from '../src/run-recovery.ts';
-import { prepareIntegration, publishIntegration, publishPullRequest, type IntegrationOptions } from '../src/git-integration.ts';
+import { createAgentAdapters } from '../../src/agent-adapters.ts';
+import { StateStore } from '../../src/state-store.ts';
+import { createWorktree } from '../../src/git-worktree.ts';
+import { createGitCheckpoint } from '../../src/git-checkpoint.ts';
+import { captureRunGitState } from '../../src/run-recovery.ts';
+import { prepareIntegration, publishIntegration, publishPullRequest, type IntegrationOptions } from '../../src/git-integration.ts';
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();

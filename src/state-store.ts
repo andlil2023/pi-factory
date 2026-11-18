@@ -73,6 +73,8 @@ export interface IntegrationAttempt {
   conflicts?: string[];
   error?: string;
   verification?: { passed: boolean; details: unknown };
+  /** Git tree of the candidate that `verification` covers. */
+  verifiedTree?: string;
   publicationVerification?: { passed: boolean; details: unknown };
   reviewSelection?: ReviewSelection;
   reviews?: AttemptRecord['reviews'];
@@ -103,6 +105,8 @@ export interface FactoryRunState {
   autoReplans?: Array<{ at: string; taskId: string; reason: 'task_too_large' | 'budget_exhausted'; superseded: string[]; added: string[]; leftoverPatch?: string }>;
   finalVerificationProgress?: VerificationProgress;
   finalVerification?: { passed: boolean; details: unknown; checkedAt: string; head?: string };
+  /** Repair tasks added after a failed final verification; bounded by execution.maxFinalRepairs. */
+  finalRepairs?: Array<{ at: string; taskId: string; verification: { passed: boolean; details: unknown }; /** The failure did not reproduce and nothing was changed: the task was removed again. */ withdrawn?: boolean }>;
   tasks: Record<string, TaskState>;
 }
 

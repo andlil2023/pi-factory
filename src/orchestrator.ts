@@ -3,7 +3,7 @@ import { AgentExecutionError } from './agent-error.ts';
 import { appendReviewResult, reconcileReviewResults } from './review-results.ts';
 import type { ReviewSelection } from './review-routing.ts';
 import type { UiEvidenceRecord } from './ui-evidence.ts';
-import { buildAttemptFeedback, type AttemptFeedback } from './attempt-feedback.ts';
+import { buildAttemptFeedback, buildFinalFailureFeedback, type AttemptFeedback } from './attempt-feedback.ts';
 import { consumedAttempts, consumedInfraRetries, type FactoryRunState, type StateStore, type AttemptRecord, type ReviewVerdict, type VerificationProgress } from './state-store.ts';
 
 export interface PlannedTask {
@@ -58,6 +58,8 @@ export interface TaskContext {
   onVerificationProgress?(progress: VerificationProgress): Promise<void>;
   requiredReviewers?: string[];
   uiEvidence?: UiEvidenceRecord;
+  /** Run every trusted verification command, ignoring task-level selection. */
+  fullVerification?: boolean;
 }
 export interface OrchestratorAdapters {
   implement(context: TaskContext): Promise<ImplementationResult>;
@@ -67,11 +69,30 @@ export interface OrchestratorAdapters {
   review(context: TaskContext, implementation: ImplementationResult, verification: VerificationResult, onReview?: ReviewProgress): Promise<ReviewResult[]>;
   checkpoint?(context: TaskContext): Promise<{ commit: string }>;
   finalVerify?(): Promise<VerificationResult>;
+  /** Whether the worktree differs from the last checkpoint. Lets a final repair that changed nothing be withdrawn. */
+  hasChanges?(context: TaskContext): Promise<boolean>;
 }
 export interface OrchestratorOptions {
   maxAttempts?: number;
   requiredReviewers?: string[];
   events?: FactoryEventBus;
+  /** Repair tasks the orchestrator may add after a failed final verification. Default 0: block. */
+  maxFinalRepairs?: number;
+}
+
+/** A task that repairs a failed final verification. It is verified with every trusted command and reviewed like any other task. */
+function finalRepairTask(state: FactoryRunState, tasks: PlannedTask[]): PlannedTask {
+  const numbers = [...tasks.map(task => task.id), ...Object.keys(state.tasks), ...(state.supersededTasks ?? []).map(entry => entry.task.id)]
+    .map(id => Number(/^T(\d+)$/.exec(id)?.[1])).filter(Number.isSafeInteger);
+  return {
+    id: `T${String(Math.max(0, ...numbers) + 1).padStart(3, '0')}`,
+    title: 'Repair final verification failure',
+    objective: 'Make the trusted full verification of the completed run pass.',
+    scope: 'Fix the cause of the failed checks listed in the feedback. Do not delete, skip or weaken tests, and do not change behavior that earlier tasks were accepted for.',
+    acceptanceCriteria: ['Every trusted verification command passes on the combined result of the run', 'No test is deleted, skipped or weakened to make verification pass'],
+    dependencies: tasks.map(task => task.id),
+    verification: ['Rerun the failing tests named in the feedback']
+  };
 }
 
 /** Sequential, deterministic orchestration. Agent calls and verification are injected adapters. */
@@ -107,6 +128,22 @@ export class Orchestrator {
             const final = await this.adapters.finalVerify();
             state.finalVerification = { ...final, checkedAt: new Date().toISOString() };
             this.options.events?.emit({type: final.passed ? 'FINAL_VERIFICATION_PASSED' : 'FINAL_VERIFICATION_FAILED'});
+            const repairs = state.finalRepairs ?? [];
+            if (!final.passed && repairs.length < (this.options.maxFinalRepairs ?? 0)) {
+              // The combined result failed although every task was accepted: give it the same repair path as a task failure.
+              const now = new Date().toISOString();
+              const task = finalRepairTask(state, tasks);
+              state.planRevisions = [...(state.planRevisions ?? []), { replacedAt: now, plan: structuredClone(state.plan) }];
+              const planned = (state.plan as { tasks?: unknown } | null)?.tasks;
+              if (Array.isArray(planned) && planned !== tasks) planned.push(structuredClone(task));
+              tasks.push(task);
+              ids.add(task.id);
+              state.tasks[task.id] = { id: task.id, status: 'pending', attempts: [] };
+              state.finalRepairs = [...repairs, { at: now, taskId: task.id, verification: structuredClone(final) }];
+              this.options.events?.emit({type:'PLAN_REVISED',taskId:task.id,message:`Final verification failed; added repair task ${task.id} (${repairs.length + 1} of ${this.options.maxFinalRepairs})`});
+              await this.store.save(state);
+              continue;
+            }
             if (!final.passed) {
               state.status = 'blocked';
               this.options.events?.emit({type:'RUN_BLOCKED', message:'Final verification failed'});
@@ -128,6 +165,7 @@ export class Orchestrator {
       const ready = remaining.find(t => state.tasks[t.id].status !== 'blocked' && t.dependencies.every(d => state.tasks[d].status === 'completed'));
       if (!ready) { state.status = 'blocked'; await this.store.save(state); throw new Error('No ready tasks: cyclic dependencies or blocked prerequisites'); }
       const taskState = state.tasks[ready.id];
+      let withdrawn = false;
       this.options.events?.emit({type:'TASK_STARTED',taskId:ready.id});
       while (consumedAttempts(taskState) < maxAttempts && taskState.status !== 'completed' && taskState.status !== 'blocked') {
         const attempt: AttemptRecord = { phase: 'implementing', number: taskState.attempts.length + 1, startedAt: new Date().toISOString() };
@@ -144,6 +182,17 @@ export class Orchestrator {
         const context: TaskContext = { task: ready, plan: structuredClone(state.plan), attempt: attempt.number, previousFeedback: feedback, ...(operatorGuidance.length ? { operatorGuidance } : {}) };
         const structured = buildAttemptFeedback(taskState.attempts.slice(0, -1));
         if (structured) context.feedback = structured;
+        const finalRepair = state.finalRepairs?.find(repair => repair.taskId === ready.id);
+        if (finalRepair) {
+          context.fullVerification = true;
+          // Until an attempt of the repair itself produces failed checks or findings, the open items are those of the
+          // failed final verification. An attempt that only timed out or crashed must not hide them.
+          const own = context.feedback;
+          if (!own || (!own.open.failedChecks.length && !own.open.findings.length && !own.open.uiEvidenceIssues.length)) {
+            const final = buildFinalFailureFeedback(finalRepair.verification);
+            context.feedback = { ...final, notes: [...final.notes, ...(own?.notes ?? [])], history: own?.history ?? [] };
+          }
+        }
         context.onVerificationProgress = async progress => {
           attempt.verificationProgress = progress;
           await this.store.save(state);
@@ -173,6 +222,11 @@ export class Orchestrator {
             if (!verification.passed) {
               taskState.status = 'repair_pending';
               taskState.lastError = 'Deterministic verification failed';
+            } else if (finalRepair && this.adapters.hasChanges && !(await this.adapters.hasChanges(context))) {
+              // Every trusted command passes and nothing was changed: the final failure did not reproduce.
+              // There is nothing to review or commit, so the repair is withdrawn below and final verification runs again.
+              withdrawn = true;
+              taskState.status = 'completed';
             } else {
               await phase('selecting_reviewers');
               const selection = this.adapters.selectReviewers
@@ -259,6 +313,22 @@ export class Orchestrator {
           attempt.finishedAt = new Date().toISOString();
           await this.store.save(state);
         }
+      }
+      if (withdrawn) {
+        const repair = state.finalRepairs!.find(entry => entry.taskId === ready.id)!;
+        repair.withdrawn = true;
+        const now = new Date().toISOString();
+        state.planRevisions = [...(state.planRevisions ?? []), { replacedAt: now, plan: structuredClone(state.plan) }];
+        const planned = (state.plan as { tasks?: unknown } | null)?.tasks;
+        if (Array.isArray(planned) && planned !== tasks) planned.splice(0, planned.length, ...planned.filter(item => (item as { id?: unknown } | null)?.id !== ready.id));
+        tasks.splice(tasks.indexOf(ready), 1);
+        ids.delete(ready.id);
+        delete state.tasks[ready.id];
+        // Attempt history is evidence; the ID is retired like any superseded task.
+        state.supersededTasks = [...(state.supersededTasks ?? []), { supersededAt: now, task: { ...taskState, status: 'blocked', lastError: 'Final verification failure did not reproduce; no repair was needed' } }];
+        this.options.events?.emit({type:'PLAN_REVISED',taskId:ready.id,message:`Withdrew repair task ${ready.id}: every trusted command passed without changes`});
+        await this.store.save(state);
+        continue;
       }
       if (taskState.status === 'repair_pending') {
         taskState.status = 'blocked';

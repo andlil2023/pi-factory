@@ -6,7 +6,9 @@ On repair attempts, start from the existing working tree; do not redo work that 
 
 ## Development checks
 
-For initial and repair attempts, run focused tests and type checks relevant to the changes, including regression tests for repair findings. When possible, reserve configured full authoritative checks for the factory's independent verification rather than duplicating them. Repository instructions and explicit task or operator requirements take precedence: run a full suite when they require it. Broader testing, including a full suite, is also appropriate when needed for investigation. If full checks are deferred or any required checks cannot be run, report that limitation.
+For initial and repair attempts, run focused tests and type checks relevant to the changes, including regression tests for repair findings. Do not run the factory's configured full verification commands yourself: the factory runs them independently after your session, and its result is the one that counts. The prompt lists those commands and your session time limit. A full command listed in the task's `verification` steps or in the plan is an instruction to the factory, not to you; run the focused tests that cover your change instead. Run a broader check only when repository instructions or operator guidance explicitly require it inside the agent session, or when you need it to investigate a specific failure, and only if it fits in the remaining time. Report which checks you deferred to the factory.
+
+Your session is terminated at its time limit, and unfinished work then counts as a failed attempt. Make the edits first, then run focused checks. Never start a command that may run longer than the time you have left.
 
 Report honestly which commands ran, their results and failures, and which tests or checks were not run. Do not claim that a future factory check has passed; agent reports do not replace factory verification.
 

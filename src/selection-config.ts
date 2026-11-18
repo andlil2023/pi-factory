@@ -37,7 +37,8 @@ export function validateSelectionConfig(selection: unknown, verification: unknow
   for (const rule of selection.rules) {
     if (!object(rule) || Object.keys(rule).some(key => key !== 'path' && key !== 'commands') || !validPath(rule.path)) return invalid('malformed repository-relative path rule');
     const path = rule.path;
-    if (paths.some(previous => previous === path || previous.startsWith(path + '/') || path.startsWith(previous + '/'))) return invalid('overlapping path rules');
+    // Nested rules are allowed: the most specific rule decides (see selectVerification).
+    if (paths.includes(path)) return invalid('duplicate path rules');
     paths.push(path);
     if (!Array.isArray(rule.commands) || !rule.commands.length || rule.commands.some((index: unknown) => !Number.isSafeInteger(index) || (index as number) < 0 || (index as number) >= verification.length)
       || new Set(rule.commands).size !== rule.commands.length) return invalid('invalid or duplicate command references');

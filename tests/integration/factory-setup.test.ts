@@ -4,8 +4,8 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import type { FactoryRunState } from '../src/state-store.ts';
-import { assertSubprocessStarted, subprocessDiagnostics } from './subprocess-diagnostics.ts';
+import type { FactoryRunState } from '../../src/state-store.ts';
+import { assertSubprocessStarted, subprocessDiagnostics } from '../subprocess-diagnostics.ts';
 
 const cli = resolve('src/factory-cli.ts');
 const node = (script: string) => ({ executable: process.execPath, args: ['-e', script] });
@@ -28,7 +28,8 @@ async function fixture(t: import('node:test').TestContext, setup: unknown) {
     tasks: [{ id: 'T001', title: 'Task T001', objective: 'Write a fixture file', scope: 'T001.txt', acceptanceCriteria: ['Fixture file exists'], dependencies: [], verification: ['trusted-check'] }] }));
   const config = join(dir, 'config.json');
   const model = { provider: 'fixture', model: 'fixture' };
-  await writeFile(config, JSON.stringify({ agents: { planner: model, implementer: model, reviewer: model }, execution: { maxAttempts: 3 }, setup,
+  // Reuse is off so the integration candidate is really verified, which is what needs the setup command.
+  await writeFile(config, JSON.stringify({ agents: { planner: model, implementer: model, reviewer: model }, execution: { maxAttempts: 3, reuseVerification: false }, setup,
     verification: [node("process.exit(require('fs').existsSync('installed.txt')?0:1)")],
     pi: { executable: process.execPath, executableArgs: [resolve('tests/fixtures/fake-replan-agent.mjs')] } }));
   const runCli = (...args: string[]) => {

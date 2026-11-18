@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { githubDestination, pushCandidate, remoteHead, type GitHubDestination } from '../src/github-pr.ts';
+import { githubDestination, pushCandidate, remoteHead, type GitHubDestination } from '../../src/github-pr.ts';
 
 function git(cwd: string, ...args: string[]): string { return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim(); }
 

@@ -4,7 +4,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import type { FactoryRunState } from '../src/state-store.ts';
+import type { FactoryRunState } from '../../src/state-store.ts';
 
 test('resumed repair selects cumulative changes since the last accepted checkpoint and pins selection configuration', async t => {
   const dir = await mkdtemp(join(tmpdir(), 'selection-resume-'));

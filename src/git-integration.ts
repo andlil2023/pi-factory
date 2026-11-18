@@ -25,6 +25,8 @@ export interface IntegrationOptions {
   adapters(worktree: string, baseline: string, attempt: number): OrchestratorAdapters;
   /** Trusted, configured preparation of a fresh integration worktree (for example dependency install). Throws on failure. */
   setup?(worktree: string): Promise<void>;
+  /** Publication accepts the preparation's passing verification of the identical Git tree instead of rerunning the commands. */
+  reuseVerification?: boolean;
   /** Dependency injection for independently tested GitHub transport. */
   github?: Pick<typeof github, 'githubDestination' | 'remoteHead' | 'pushCandidate' | 'createPullRequest' | 'verifyPullRequest'>;
 }
@@ -136,9 +138,12 @@ export async function prepareIntegration(store: StateStore, state: FactoryRunSta
     await setPhase(store, state, record, 'setup');
     if (options.setup) await options.setup(record.worktree);
     await setPhase(store, state, record, 'verifying');
+    // Never reused: this is the only verification in a fresh checkout with freshly set-up dependencies.
+    // Earlier results came from the run worktree, whose ignored files a Git tree does not describe.
     record.verification = await adapters.verify(context);
     await store.save(state);
     if (!record.verification.passed) throw new Error('Integration verification failed');
+    record.verifiedTree = await git(record.worktree, ['rev-parse', 'HEAD^{tree}']);
     await assertCandidate(state, record);
     await setPhase(store, state, record, 'selecting_reviewers');
     const selection = adapters.selectReviewers ? await adapters.selectReviewers(context) : { requiredReviewers: [...options.enabledReviewers], changedFiles: [], reasons: ['Static integration review requirements'] };
@@ -198,7 +203,12 @@ async function publicationPreflight(store: StateStore, state: FactoryRunState, o
     const adapters = options.adapters(record.worktree, record.targetHead, record.number);
     delete record.verificationProgress;
     await setPhase(store, state, record, 'publication_verifying');
-    record.publicationVerification = await adapters.verify(contextFor(state, record, options, store));
+    // Same worktree, same set-up dependencies, and assertCandidate proved it clean at the prepared commit:
+    // the tree that preparation verified with every trusted command is the tree being published.
+    const tree = await git(record.worktree, ['rev-parse', 'HEAD^{tree}']);
+    record.publicationVerification = options.reuseVerification === true && record.verifiedTree === tree
+      ? { passed: true, details: { mode: 'full', reused: { from: 'integration verification', tree } } }
+      : await adapters.verify(contextFor(state, record, options, store));
     await store.save(state);
     if (!record.publicationVerification.passed) throw new Error('Pre-publication verification failed');
     if (required.includes('ui') && adapters.collectUiEvidence) {

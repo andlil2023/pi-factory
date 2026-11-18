@@ -45,7 +45,8 @@ export function selectVerification<T extends VerificationCommand>(
     }
     const dependency = selection.dependencyPaths.find(path => matches(change.path, path));
     if (dependency) return full([`Changed verification dependency: ${change.path} (declared ${dependency})`]);
-    const rule = selection.rules.find(candidate => matches(change.path, candidate.path));
+    // The longest matching prefix wins, so a rule for one file can override the rule for its directory.
+    const rule = selection.rules.filter(candidate => matches(change.path, candidate.path)).sort((a, b) => b.path.length - a.path.length)[0];
     if (!rule) return full([`No verification mapping for changed path: ${change.path}`]);
     for (const index of rule.commands) selected.add(index);
     reasons.push(`Mapped ${change.path} to ${rule.path}`);

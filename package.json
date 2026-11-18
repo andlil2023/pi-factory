@@ -4,10 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "test": "node --experimental-strip-types --test tests/*.test.ts tests/integration/*.test.ts",
     "check": "tsc --noEmit",
     "init": "node --experimental-strip-types src/init.ts",
-    "factory": "node --experimental-strip-types src/factory-cli.ts"
+    "factory": "node --experimental-strip-types src/factory-cli.ts",
+    "test:fast": "node --experimental-strip-types --test tests/*.test.ts",
+    "test:integration": "node --experimental-strip-types --test tests/integration/*.test.ts"
   },
   "dependencies": {
     "ajv": "^8.17.1"

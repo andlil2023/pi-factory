@@ -4,8 +4,8 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import type { FactoryRunState } from '../src/state-store.ts';
-import { assertSubprocessStarted, subprocessDiagnostics } from './subprocess-diagnostics.ts';
+import type { FactoryRunState } from '../../src/state-store.ts';
+import { assertSubprocessStarted, subprocessDiagnostics } from '../subprocess-diagnostics.ts';
 
 for (const gate of ['final', 'preparation', 'publication'] as const) test(`${gate} runs all trusted checks despite task selection and blocks on failure`, async t => {
   const dir = await mkdtemp(join(tmpdir(), 'factory-full-gate-'));
@@ -21,8 +21,8 @@ for (const gate of ['final', 'preparation', 'publication'] as const) test(`${gat
     `const fs=require('fs');fs.appendFileSync(${JSON.stringify(log)},'${n}\\n');${n === 1 ? `if(fs.existsSync(${JSON.stringify(marker)}))process.exit(1);` : ''}`]}));
   const model = {provider:'fixture',model:'fixture'};
   const config = join(dir, 'config.json');
-  // Reruns of failed commands are disabled so the log counts exactly one execution per selected check.
-  await writeFile(config, JSON.stringify({agents:{planner:model,implementer:model,reviewer:model}, verification, execution:{verificationReruns:0},
+  // Reruns, reuse of earlier results and final repairs are disabled: every gate runs every check exactly once and blocks on failure.
+  await writeFile(config, JSON.stringify({agents:{planner:model,implementer:model,reviewer:model}, verification, execution:{verificationReruns:0,reuseVerification:false,maxFinalRepairs:0},
     verificationSelection:{rules:[{path:'T001.txt',commands:[0]}],dependencyPaths:[],dependenciesComprehensive:true},
     pi:{executable:process.execPath,executableArgs:[resolve('tests/fixtures/fake-factory-agent.mjs')]}}));
   const plan = join(dir,'plan.json');

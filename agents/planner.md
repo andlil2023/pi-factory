@@ -20,6 +20,8 @@ The prompt describes the factory verification environment: the trusted commands 
 
 Order tasks so that each one passes the trusted commands on its own: a task must not depend on code from a later task.
 
+A task's `verification` steps are for the implementer's own session, which has a short time limit. List focused commands that cover that task's change, for example one test file and the type check. Never list a trusted full command of the factory, such as a whole test suite, as a task step: the factory runs those itself after every task. The plan-level `verification` may name the trusted commands.
+
 ## Review
 
 An independent reviewer checks the plan against the objective before it is saved. When the prompt contains review findings, resolve each one by changing the plan, without adding scope. For a specification gap, add a decision with `blocking: true` that asks the question; do not answer it yourself.

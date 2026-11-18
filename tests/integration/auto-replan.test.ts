@@ -4,9 +4,9 @@ import { execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { autoReplanCandidate, assertReplacementPlan, saveLeftoverPatch, resetRunWorktree } from '../src/auto-replan.ts';
-import type { PlannedTask } from '../src/orchestrator.ts';
-import type { AttemptRecord, FactoryRunState, TaskState } from '../src/state-store.ts';
+import { autoReplanCandidate, assertReplacementPlan, saveLeftoverPatch, resetRunWorktree } from '../../src/auto-replan.ts';
+import type { PlannedTask } from '../../src/orchestrator.ts';
+import type { AttemptRecord, FactoryRunState, TaskState } from '../../src/state-store.ts';
 
 const attempt = (number: number, extra: Partial<AttemptRecord> = {}): AttemptRecord => ({ number, startedAt: 'a', finishedAt: 'b', outcome: 'implemented', ...extra });
 const state = (task: Partial<TaskState>, extra: Partial<FactoryRunState> = {}): FactoryRunState => ({

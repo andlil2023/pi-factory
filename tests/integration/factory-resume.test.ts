@@ -4,7 +4,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import type { FactoryRunState } from '../src/state-store.ts';
+import type { FactoryRunState } from '../../src/state-store.ts';
 
 const cli = resolve('src/factory-cli.ts');
 for (const budget of [undefined, 2] as const) test(`CLI pins ${budget === undefined ? 'default' : 'explicit'} infrastructure budget and resumes with history intact`, async t => {

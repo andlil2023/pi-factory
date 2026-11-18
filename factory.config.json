@@ -33,7 +33,9 @@
     "maxAttempts": 3,
     "maxInfraRetries": 1,
     "verificationReruns": 1,
-    "maxAutoReplans": 2
+    "maxAutoReplans": 2,
+    "maxFinalRepairs": 2,
+    "reuseVerification": true
   },
   "planning": {
     "maxReviewRounds": 2
@@ -55,13 +57,158 @@
   "verification": [
     {
       "executable": "node",
-      "args": ["node_modules/typescript/bin/tsc", "--noEmit"],
+      "args": [
+        "node_modules/typescript/bin/tsc",
+        "--noEmit"
+      ],
       "timeoutMs": 120000
     },
     {
       "executable": "node",
-      "args": ["--experimental-strip-types", "--test", "tests/*.test.ts"],
+      "args": [
+        "--experimental-strip-types",
+        "--test",
+        "tests/*.test.ts"
+      ],
+      "timeoutMs": 300000
+    },
+    {
+      "executable": "node",
+      "args": [
+        "--experimental-strip-types",
+        "--test",
+        "tests/integration/*.test.ts"
+      ],
       "timeoutMs": 1200000
     }
-  ]
+  ],
+  "verificationSelection": {
+    "rules": [
+      {
+        "path": "src",
+        "commands": [
+          0,
+          1,
+          2
+        ]
+      },
+      {
+        "path": "src/dashboard",
+        "commands": [
+          0,
+          1
+        ]
+      },
+      {
+        "path": "src/attempt-feedback.ts",
+        "commands": [
+          0,
+          1
+        ]
+      },
+      {
+        "path": "src/plan-review.ts",
+        "commands": [
+          0,
+          1
+        ]
+      },
+      {
+        "path": "src/review-routing.ts",
+        "commands": [
+          0,
+          1
+        ]
+      },
+      {
+        "path": "src/review-results.ts",
+        "commands": [
+          0,
+          1
+        ]
+      },
+      {
+        "path": "src/event-bus.ts",
+        "commands": [
+          0,
+          1
+        ]
+      },
+      {
+        "path": "src/verification-selector.ts",
+        "commands": [
+          0,
+          1
+        ]
+      },
+      {
+        "path": "tests",
+        "commands": [
+          0,
+          1
+        ]
+      },
+      {
+        "path": "tests/integration",
+        "commands": [
+          0,
+          2
+        ]
+      },
+      {
+        "path": "tests/fixtures",
+        "commands": [
+          0,
+          1,
+          2
+        ]
+      },
+      {
+        "path": "tests/browser-evidence",
+        "commands": [
+          0,
+          1,
+          2
+        ]
+      },
+      {
+        "path": "tests/subprocess-diagnostics.ts",
+        "commands": [
+          0,
+          1,
+          2
+        ]
+      },
+      {
+        "path": "README.md",
+        "commands": [
+          0
+        ]
+      },
+      {
+        "path": "AGENTS.md",
+        "commands": [
+          0
+        ]
+      },
+      {
+        "path": "docs",
+        "commands": [
+          0
+        ]
+      },
+      {
+        "path": "examples",
+        "commands": [
+          0
+        ]
+      }
+    ],
+    "dependencyPaths": [
+      "package.json",
+      "package-lock.json",
+      "tsconfig.json"
+    ],
+    "dependenciesComprehensive": true
+  }
 }
