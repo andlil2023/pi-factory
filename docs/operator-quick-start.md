@@ -76,6 +76,19 @@ Copy-Item (Join-Path $packageSkills 'factory-status') (Join-Path $target '.pi\sk
 
 Do not overwrite existing skills without reviewing them. Start Pi in the target and use `/skill:factory-start help me plan my objective` or `/skill:factory-status inspect my runs`; `/reload` picks up newly added skills in an active session. The start skill stops for plan review; status is read-only and does not approve execution or lock recovery. Review skill instructions before granting project trust.
 
+## Creating a tagged release
+
+A repository maintainer should first review the release commit and ensure `package.json` and the lockfile contain the intended version. From that commit, create and push a matching `v`-prefixed version tag (substitute the actual version):
+
+```powershell
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+A push of a `v`-prefixed tag runs the Windows checks workflow. Only after the Windows type check, fast tests and integration tests pass does its release job download the same npm tarball tested by the integration test and create a GitHub Release for that tag. The release attaches the `pi-factory-<version>.tgz` package; GitHub also provides its generated source archives. Inspect the Actions run and release assets after the push. A failed check or release job needs investigation before retrying; pushing a tag does not publish anything to the npm registry.
+
+The maintainer needs permission to push the tag; GitHub Actions must be enabled and the repository or organization must allow the workflow's `GITHUB_TOKEN` to have `contents: write` for release creation. The Windows job uses only `contents: read`; the release job alone requests `contents: write`. The token is supplied by Actions, not stored in the repository, and no npm registry credential is needed. This tagged-release process is separate from the factory's approval-gated integration and publication steps.
+
 ## Upgrade
 
-After reviewing the release and choosing another existing tag, repeat the global install with that exact tag, for example `npm install --global "git+https://github.com/andlil2023/pi-factory.git#v0.1.1"` when available. Check `pi-factory --help` afterwards. Upgrading the package does not overwrite the target's initialized files; review configuration compatibility and preserve the original configuration when resuming an existing run. Do not upgrade during an active run. No npm registry publication is required for tag installation.
+After reviewing the release and choosing another existing tag, repeat the global install with that exact tag, for example `npm install --global "git+https://github.com/andlil2023/pi-factory.git#v0.1.1"` when available. Alternatively, download the release's tested `.tgz` asset and run `npm install --global PATH_TO_DOWNLOADED_TGZ`. Check `pi-factory --help` afterwards. Upgrading the package does not overwrite the target's initialized files; review configuration compatibility and preserve the original configuration when resuming an existing run. Do not upgrade during an active run. No npm registry publication is required for tag installation.
