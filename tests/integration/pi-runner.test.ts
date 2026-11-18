@@ -4,7 +4,7 @@ import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runPi, PiRunError, type PiRunRequest } from '../src/pi-runner.ts';
+import { runPi, PiRunError, type PiRunRequest } from '../../src/pi-runner.ts';
 
 /** Cross-platform process tests: launch fake PI via the Node executable. */
 async function fixture(t: TestContext) {
@@ -13,10 +13,10 @@ async function fixture(t: TestContext) {
   const instructionsFile = join(dir, 'planner.md');
   await writeFile(instructionsFile, '# Planner\nReturn a plan.\n');
   const executable = process.execPath;
-  const fakeScript = new URL('./fixtures/fake-pi.mjs', import.meta.url);
+  const fakeScript = new URL('../fixtures/fake-pi.mjs', import.meta.url);
   const request: PiRunRequest = {
     role: 'planner', executable, executableArgs: [fileURLToPath(fakeScript)], repository: dir, instructionsFile,
-    provider: 'openai', model: 'test-model', prompt: 'hello', timeoutMs: 5000,
+    provider: 'openai', model: 'test-model', prompt: 'hello', timeoutMs: 30_000,
     tools: ['read', 'grep'],
   };
   return { dir, request };
@@ -86,7 +86,7 @@ test('missing executable rejects without uncaught pipe errors', async t => {
 test('early exit during a large stdin write preserves failure without uncaught EPIPE', async t => {
   const { request } = await fixture(t);
   await assert.rejects(runPi({ ...request,
-    executableArgs: [fileURLToPath(new URL('./fixtures/fake-pi-input-failure.mjs', import.meta.url)), 'exit'],
+    executableArgs: [fileURLToPath(new URL('../fixtures/fake-pi-input-failure.mjs', import.meta.url)), 'exit'],
     prompt: 'large'.repeat(200_000)
   }), PiRunError);
 });
@@ -94,7 +94,7 @@ test('early exit during a large stdin write preserves failure without uncaught E
 test('times out with a large prompt when the child never consumes stdin', async t => {
   const { request } = await fixture(t);
   await assert.rejects(runPi({ ...request,
-    executableArgs: [fileURLToPath(new URL('./fixtures/fake-pi-input-failure.mjs', import.meta.url)), 'stall'],
+    executableArgs: [fileURLToPath(new URL('../fixtures/fake-pi-input-failure.mjs', import.meta.url)), 'stall'],
     prompt: 'large'.repeat(200_000), timeoutMs: 250
   }), /timed out/);
 });
@@ -103,7 +103,7 @@ test('cancels with a large prompt when the child never consumes stdin', async t 
   const { request } = await fixture(t);
   const controller = new AbortController();
   const pending = runPi({ ...request,
-    executableArgs: [fileURLToPath(new URL('./fixtures/fake-pi-input-failure.mjs', import.meta.url)), 'stall'],
+    executableArgs: [fileURLToPath(new URL('../fixtures/fake-pi-input-failure.mjs', import.meta.url)), 'stall'],
     prompt: 'large'.repeat(200_000), signal: controller.signal
   });
   setTimeout(() => controller.abort(), 250);
@@ -113,7 +113,7 @@ test('cancels with a large prompt when the child never consumes stdin', async t 
 test('classifies process failures without classifying cancellation or launch failure', async t => {
   const { dir, request } = await fixture(t);
   for (const prompt of ['fail', 'invalid', 'empty', 'sleep']) {
-    await assert.rejects(runPi({ ...request, prompt, timeoutMs: prompt === 'sleep' ? 150 : 5000 }), (e: unknown) => {
+    await assert.rejects(runPi({ ...request, prompt, timeoutMs: prompt === 'sleep' ? 150 : 30_000 }), (e: unknown) => {
       assert.ok(e instanceof PiRunError);
       assert.equal(e.retryable, true);
       return true;

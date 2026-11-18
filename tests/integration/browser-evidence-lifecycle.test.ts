@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { Cdp, withOwnedResources } from './browser-evidence/collect-dashboard.ts';
+import { Cdp, withOwnedResources } from '../browser-evidence/collect-dashboard.ts';
 
 function resources(events: string[]) {
   return {

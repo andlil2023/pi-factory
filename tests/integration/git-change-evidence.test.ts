@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtemp, writeFile, rm, rename } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { collectGitChangeEvidence } from '../src/git-change-evidence.ts';
+import { collectGitChangeEvidence } from '../../src/git-change-evidence.ts';
 
 async function repository(fn: (repo: string, baseline: string, git: (...args: string[]) => string) => Promise<void>) {
   const repo = await mkdtemp(join(tmpdir(), 'factory-evidence-'));

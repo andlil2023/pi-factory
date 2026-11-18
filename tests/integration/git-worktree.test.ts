@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { createWorktree, removeWorktree, getWorktreeDiff } from '../src/git-worktree.ts';
+import { createWorktree, removeWorktree, getWorktreeDiff } from '../../src/git-worktree.ts';
 
 function git(cwd: string, ...args: string[]): string {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8', shell: false });

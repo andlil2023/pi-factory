@@ -4,8 +4,8 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import type { FactoryRunState } from '../src/state-store.ts';
-import { assertSubprocessStarted, subprocessDiagnostics } from './subprocess-diagnostics.ts';
+import type { FactoryRunState } from '../../src/state-store.ts';
+import { assertSubprocessStarted, subprocessDiagnostics } from '../subprocess-diagnostics.ts';
 
 const cli = resolve('src/factory-cli.ts');
 test('CLI reviews a new plan, then replans a too-large task and completes the run without an operator', async t => {
@@ -61,6 +61,10 @@ test('CLI reviews a new plan, then replans a too-large task and completes the ru
   assert.deepEqual(state.supersededTasks?.map(entry => entry.task.id), ['T002']);
   assert.equal(state.planRevisions?.length, 1);
   assert.equal(state.autoReplans?.length, 1);
+  // No task selection is configured, so the last task ran every trusted command on the tree it committed: final verification reuses it.
+  const final = state.finalVerification as { passed: boolean; tree?: string; details: { reused?: { from: string; taskId: string } } };
+  assert.deepEqual([final.passed, final.details.reused?.from, final.details.reused?.taskId], [true, 'task verification', 'T004']);
+  assert.match(final.tree ?? '', /^[a-f0-9]{40}$/);
   const record = state.autoReplans![0];
   assert.deepEqual([record.taskId, record.reason, record.superseded, record.added], ['T002', 'task_too_large', ['T002'], ['T003', 'T004']]);
   assert.match(await readFile(record.leftoverPatch!, 'utf8'), /PARTIAL_WORK_OF_T002/);

@@ -4,9 +4,9 @@ import { execFileSync } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { createAgentAdapters } from '../src/agent-adapters.ts';
-import { Orchestrator, type PlannedTask } from '../src/orchestrator.ts';
-import { StateStore } from '../src/state-store.ts';
+import { createAgentAdapters } from '../../src/agent-adapters.ts';
+import { Orchestrator, type PlannedTask } from '../../src/orchestrator.ts';
+import { StateStore } from '../../src/state-store.ts';
 
 const task: PlannedTask = { id: 'T001', title: 'test', objective: 'test', scope: 'test', acceptanceCriteria: ['test'], dependencies: [], verification: [] };
 const context = { task, attempt: 1, previousFeedback: [] };

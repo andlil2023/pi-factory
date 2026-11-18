@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { assertSubprocessStarted, subprocessDiagnostics } from './subprocess-diagnostics.ts';
+import { assertSubprocessStarted, subprocessDiagnostics } from '../subprocess-diagnostics.ts';
 
 test('subprocess diagnostics report controlled failures and bound output', () => {
   const failed = spawnSync(process.execPath, ['-e', "process.stdout.write('x'.repeat(10000)); process.stderr.write('failure'); process.exit(7)"], { encoding: 'utf8', timeout: 30_000 });

@@ -41,8 +41,8 @@ Deterministic factory validation checks the manifest contract, task/attempt and 
 From the repository root, with the browser prerequisites available:
 
 ```sh
-node --experimental-strip-types --test tests/browser-evidence-lifecycle.test.ts tests/browser-evidence-smoke.test.ts
-node --experimental-strip-types --test tests/ui-evidence.test.ts tests/ui-evidence-orchestrator.test.ts tests/ui-evidence-timing-regression.test.ts
+node --experimental-strip-types --test tests/integration/browser-evidence-lifecycle.test.ts tests/integration/browser-evidence-smoke.test.ts
+node --experimental-strip-types --test tests/integration/ui-evidence.test.ts tests/ui-evidence-orchestrator.test.ts tests/integration/ui-evidence-timing-regression.test.ts
 npm run check
 npm test
 ```

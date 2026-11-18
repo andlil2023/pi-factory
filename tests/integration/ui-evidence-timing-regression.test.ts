@@ -5,8 +5,8 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { ContractValidator } from '../src/contract-validator.ts';
-import { assertUiEvidenceCurrent, collectUiEvidence } from '../src/ui-evidence.ts';
+import { ContractValidator } from '../../src/contract-validator.ts';
+import { assertUiEvidenceCurrent, collectUiEvidence } from '../../src/ui-evidence.ts';
 
 test('collection accepts the observed 4 ms post-end clock offset', async t => {
   const dir = await mkdtemp(join(tmpdir(), 'factory-ui-clock-'));

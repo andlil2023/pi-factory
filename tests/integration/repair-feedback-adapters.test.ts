@@ -4,8 +4,8 @@ import { execFileSync } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { createAgentAdapters, type AgentAdapterConfig, type VerificationCheck } from '../src/agent-adapters.ts';
-import type { AttemptFeedback } from '../src/attempt-feedback.ts';
+import { createAgentAdapters, type AgentAdapterConfig, type VerificationCheck } from '../../src/agent-adapters.ts';
+import type { AttemptFeedback } from '../../src/attempt-feedback.ts';
 
 const model = { provider: 'test-provider', model: 'test-model' };
 const task = { id: 'T001', title: 'Test', objective: 'Test', scope: 'Test', acceptanceCriteria: ['Test'], dependencies: [], verification: ['test'] };
