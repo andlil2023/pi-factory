@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createAgentAdapters } from '../../src/agent-adapters.ts';
 import { StateStore } from '../../src/state-store.ts';
+import { DashboardReader } from '../../src/dashboard-reader.ts';
 import { createWorktree } from '../../src/git-worktree.ts';
 import { createGitCheckpoint } from '../../src/git-checkpoint.ts';
 import { captureRunGitState } from '../../src/run-recovery.ts';
@@ -70,7 +71,14 @@ test('preparation verifies and reviews a separate merge, publication needs its e
         assert.deepEqual((await store.load(state.runId)).integrations!.at(-1)!.verificationProgress, {mode:'full',completed:0,total:2,failed:0});
         return adapters.verify(context);
       },
-      review: async (...reviewArgs) => { await observe('reviewing'); return adapters.review(...reviewArgs); }
+      review: async (...reviewArgs) => {
+        await observe('reviewing');
+        assert.equal((await store.load(state.runId)).integrations!.at(-1)!.verification?.passed, true);
+        const result = await adapters.review(...reviewArgs);
+        await reviewArgs[3]?.(result[0]);
+        assert.equal((await store.load(state.runId)).integrations!.at(-1)!.reviews?.[0].verdict, 'approved');
+        return result;
+      }
     };
   };
   const candidate = await prepareIntegration(store, state, options);
@@ -90,6 +98,22 @@ test('preparation verifies and reviews a separate merge, publication needs its e
   assert.equal(git(repository, 'status', '--porcelain'), '');
   assert.deepEqual(counts(), { verified: 2, reviewed: 1 });
   assert.equal((await store.load(state.runId)).integrations?.[0].status, 'published');
+});
+
+test('failed verification records its phase across a fresh attempt and reread', async t => {
+  const { store, state, options } = await fixture(t);
+  const original = options.adapters;
+  options.adapters = (...args) => ({ ...original(...args), verify: async () => ({ passed: false, details: { output: 'SECRET' } }) });
+  const failed = await prepareIntegration(store, state, options);
+  assert.equal(failed.failedPhase, 'verifying');
+  options.adapters = original;
+  const reloaded = await store.load(state.runId);
+  const ready = await prepareIntegration(store, reloaded, options, true);
+  assert.equal(ready.phase, 'awaiting_publication');
+  const attempts = (await store.load(state.runId)).integrations!;
+  assert.equal(attempts[0].failedPhase, 'verifying');
+  assert.equal(attempts[1].failedPhase, undefined);
+  assert.equal(attempts[1].verification?.passed, true);
 });
 
 test('remote-backed repositories cannot publish by merging the local target', async t => {
@@ -116,6 +140,18 @@ test('publication rechecks remotes after verification', async t => {
   await assert.rejects(publishIntegration(store, state, options, record.commit!), /Local publication is disabled/);
   assert.equal(git(repository, 'rev-parse', 'HEAD'), target);
   assert.equal(record.status, 'ready');
+  const reloaded = await store.load(state.runId);
+  assert.equal(reloaded.integrations![0].phase, 'stopped');
+  assert.equal(reloaded.integrations![0].failedPhase, 'publication_checking');
+  const dashboard = await new DashboardReader(repository).readRun(state.runId);
+  assert.ok(dashboard.available);
+  assert.equal(dashboard.run.integrations[0].failedPhase, 'publication_checking');
+  assert.match(dashboard.run.integrations[0].error!, /Publication checks failed/);
+  git(repository, 'remote', 'remove', 'origin');
+  options.adapters = () => ({ implement: async () => { assert.fail(); }, verify: async () => ({ passed: true, details: {} }), review: async () => { assert.fail(); } });
+  const published = await publishIntegration(store, reloaded, options, record.commit!);
+  assert.equal(published.status, 'published');
+  assert.equal((await store.load(state.runId)).integrations![0].failedPhase, undefined);
 });
 
 test('GitHub publication pushes the reviewed candidate and records an open PR, not a merge', async t => {
@@ -201,7 +237,7 @@ test('reconciliation handles open, closed and unreadable GitHub responses withou
 });
 
 test('GitHub publication fails closed on a moved base or an ambiguous push', async t => {
-  const { store, state, options } = await fixture(t);
+  const { repository, store, state, options } = await fixture(t);
   const record = await prepareIntegration(store, state, options);
   let moved = true;
   options.github = {
@@ -214,9 +250,17 @@ test('GitHub publication fails closed on a moved base or an ambiguous push', asy
   };
   await assert.rejects(publishPullRequest(store, state, options, record.commit!), /base differs/);
   assert.equal(record.status, 'ready');
+  const reloaded = await store.load(state.runId);
+  assert.equal(reloaded.integrations![0].phase, 'stopped');
+  assert.equal(reloaded.integrations![0].failedPhase, 'publication_checking');
+  const dashboard = await new DashboardReader(repository).readRun(state.runId);
+  assert.ok(dashboard.available);
+  assert.equal(dashboard.run.integrations[0].failedPhase, 'publication_checking');
+  assert.match(dashboard.run.integrations[0].error!, /Publication checks failed/);
   moved = false;
   await assert.rejects(publishPullRequest(store, state, options, record.commit!), /manual reconciliation/);
   assert.equal(record.status, 'pr-publishing');
+  assert.equal((await store.load(state.runId)).integrations![0].failedPhase, undefined);
   assert.equal((await store.load(state.runId)).integrations?.[0].status, 'pr-publishing');
   await assert.rejects(publishPullRequest(store, state, options, record.commit!), /latest ready/);
 });
@@ -274,6 +318,7 @@ test('preserves merge conflicts without touching source or target', async t => {
   const target = git(repository, 'rev-parse', 'HEAD');
   const record = await prepareIntegration(store, state, options);
   assert.equal(record.status, 'conflicted');
+  assert.equal((await store.load(state.runId)).integrations?.[0].failedPhase, 'merging');
   assert.deepEqual(record.conflicts, ['source.txt']);
   assert.match(await readFile(join(record.worktree, 'source.txt'), 'utf8'), /<<<<<<</);
   assert.ok(git(record.worktree, 'rev-parse', '--verify', 'MERGE_HEAD'));
@@ -335,7 +380,9 @@ for (const obstruction of ['target-moved', 'candidate-dirty', 'target-dirty', 'p
     await assert.rejects(publishIntegration(store, state, options, record.commit!));
     assert.equal(record.status, 'blocked');
     assert.equal(git(repository, 'rev-parse', 'HEAD'), target);
-    assert.equal((await store.load(state.runId)).integrations?.[0].status, 'blocked');
+    const persisted = (await store.load(state.runId)).integrations?.[0];
+    assert.equal(persisted?.status, 'blocked');
+    assert.equal(persisted?.failedPhase, obstruction === 'publication-tests-failed' ? 'publication_verifying' : 'publication_checking');
   });
 }
 

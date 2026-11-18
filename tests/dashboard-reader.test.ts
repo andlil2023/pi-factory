@@ -55,6 +55,21 @@ test('dashboard reader projects state, isolates unavailable runs, and limits eve
     ]);
     assert.deepEqual(revised.run.tasks[0].attempts.map(a => a.flakyCount), [2, 0, 0]);
     assert.doesNotMatch(JSON.stringify(revised), /leftover\.patch|secret command/);
+    const integrationState = { ...state, runId: 'integration', integrations: [
+      { number: 1, status: 'blocked', phase: 'stopped', failedPhase: 'verifying', verification: { passed: false, details: 'SECRET_OUTPUT' } },
+      { number: 2, status: 'preparing', phase: 'reviewing', verification: { passed: true, details: 'SECRET_OUTPUT' }, uiEvidence: { passed: true, artifact: 'SECRET_ARTIFACT' }, reviews: [{ reviewer: 'code', verdict: 'approved' }] }
+    ] };
+    await writeFile(join(dir, 'integration.json'), JSON.stringify(integrationState));
+    const inReview = await reader.readRun('integration'); assert.ok(inReview.available);
+    assert.equal(inReview.run.integrations[0].failedPhase, 'verifying');
+    assert.equal(inReview.run.integrations[1].verification?.passed, true);
+    assert.equal(inReview.run.integrations[1].uiEvidence?.passed, true);
+    assert.equal(inReview.run.integrations[1].reviews[0].verdict, 'approved');
+    assert.doesNotMatch(JSON.stringify(inReview), /SECRET_/);
+    integrationState.integrations[1].status = 'ready'; integrationState.integrations[1].phase = 'awaiting_publication';
+    await writeFile(join(dir, 'integration.json'), JSON.stringify(integrationState));
+    const readyIntegration = await reader.readRun('integration'); assert.ok(readyIntegration.available);
+    assert.equal(readyIntegration.run.integrations[1].phase, 'awaiting_publication');
     // Even malformed optional fields must not bypass the projection allowlist.
     const malformed = { ...state, runId: 'malformed', execution: { maxAttempts: { prompt: 'SECRET_CONFIG' } }, finalVerification: { passed: true, checkedAt: { artifact: 'SECRET_ARTIFACT' } }, integrations: [{ number: { prompt: 'SECRET_PROMPT' }, status: { artifact: 'SECRET_ARTIFACT' }, error: { stdout: 'SECRET_OUTPUT' }, reviews: [{ reviewer: { prompt: 'SECRET_PROMPT' }, verdict: { artifact: 'SECRET_ARTIFACT' } }] }] };
     await writeFile(join(dir, 'malformed.json'), JSON.stringify(malformed));
@@ -82,10 +97,34 @@ test('dashboard reader projects state, isolates unavailable runs, and limits eve
       assert.equal(fallback.run.objectiveSummary, undefined);
       assert.equal(fallback.run.tasks[0].title, 'T001');
     }
+    const progressState = { ...state, runId: 'progress', finalVerification: undefined, finalVerificationProgress: {
+      mode: 'full', completed: 1, total: 2, failed: 0, status: 'running', currentCheck: 2, startedAt: '2025-01-01T00:00:00Z',
+      checks: [{ ordinal: 1, passed: true, command: 'SECRET_COMMAND', output: 'SECRET_OUTPUT' }, { ordinal: '<script>', passed: true }], command: 'SECRET_COMMAND'
+    } };
+    await writeFile(join(dir, 'progress.json'), JSON.stringify(progressState));
+    const running = await reader.readRun('progress'); assert.ok(running.available);
+    assert.deepEqual(running.run.finalVerificationProgress, { mode: 'full', completed: 1, total: 2, failed: 0, status: 'running', currentCheck: 2, checks: [{ ordinal: 1, passed: true }], startedAt: '2025-01-01T00:00:00.000Z' });
+    assert.doesNotMatch(JSON.stringify(running), /SECRET_|<script>/);
+    await writeFile(join(dir, 'progress.json'), JSON.stringify({ ...progressState, finalVerificationProgress: { ...progressState.finalVerificationProgress, completed: 2, failed: 1, status: 'failed', currentCheck: undefined, checks: [{ ordinal: 1, passed: true }, { ordinal: 2, passed: false }] }, finalVerification: { passed: false, checkedAt: 'now', details: 'SECRET_OUTPUT' } }));
+    const finished = await reader.readRun('progress'); assert.ok(finished.available);
+    assert.equal(finished.run.finalVerificationProgress?.status, 'failed');
+    assert.deepEqual(finished.run.finalVerificationProgress?.checks, [{ ordinal: 1, passed: true }, { ordinal: 2, passed: false }]);
+    assert.equal(finished.run.finalVerification?.passed, false);
+    assert.doesNotMatch(JSON.stringify(finished), /SECRET_/);
+    await writeFile(join(dir, 'progress.json'), JSON.stringify({ ...progressState, finalVerificationProgress: { ...progressState.finalVerificationProgress, status: 'interrupted', currentCheck: undefined, startedAt: 'SECRET_INVALID_TIMESTAMP' } }));
+    const interrupted = await reader.readRun('progress'); assert.ok(interrupted.available);
+    assert.equal(interrupted.run.finalVerificationProgress?.status, 'interrupted');
+    assert.equal(interrupted.run.finalVerificationProgress?.startedAt, undefined);
+    assert.doesNotMatch(JSON.stringify(interrupted), /SECRET_/);
+    assert.equal(good.run.finalVerificationProgress, undefined);
     const lines = Array.from({ length: 2100 }, (_, i) => JSON.stringify({ timestamp: String(i), runId: 'good', type: 'RUN_STARTED', details: { prompt: 'SECRET_PROMPT' } }));
     await writeFile(join(dir, 'good.events.jsonl'), lines.join('\n') + '\n{');
     const events = await reader.readEvents('good');
     assert.equal(events.length, 2000); assert.equal(events[0].timestamp, '100');
     assert.doesNotMatch(JSON.stringify(events), /SECRET_/);
+    await writeFile(join(dir, 'good.events.jsonl'), JSON.stringify({timestamp:'later', runId:'good', type:'VERIFICATION_STARTED', taskId:'T001', attempt:2, details:{stdout:'SECRET_OUTPUT'}}) + '\n');
+    const refreshed = await reader.readEvents('good');
+    assert.deepEqual(refreshed, [{timestamp:'later', runId:'good', type:'VERIFICATION_STARTED', taskId:'T001', attempt:2}]);
+    assert.doesNotMatch(JSON.stringify(refreshed), /SECRET_OUTPUT/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
