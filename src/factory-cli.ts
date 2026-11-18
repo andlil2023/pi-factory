@@ -584,7 +584,8 @@ async function listCommand(flags:Record<string,string|boolean>):Promise<void> {
       if (task.status!=='blocked' || attempt?.outcome!=='blocked') continue;
       for (const blocker of attempt.blockers) if (typeof blocker.kind==='string' && ['decision_needed','environment_missing','task_too_large'].includes(blocker.kind)) kinds.add(blocker.kind);
     }
-    console.log(`${id}: inferred topics: ${labels.join(', ') || 'unavailable'}; persisted status: ${run.status}; last recorded activity: ${activity}; blocking reason: ${[...kinds].sort().join(', ') || 'unavailable'}`);
+    const rerunAttempts=run.tasks.reduce((count,task)=>count+task.attempts.filter(attempt=>attempt.flakyCount>=1).length,0);
+    console.log(`${id}: inferred topics: ${labels.join(', ') || 'unavailable'}; persisted status: ${run.status}; last recorded activity: ${activity}; blocking reason: ${[...kinds].sort().join(', ') || 'unavailable'}${run.autoReplans.length ? `; automatic plan revisions: ${run.autoReplans.length}` : ''}${rerunAttempts ? `; attempts passed on rerun: ${rerunAttempts}` : ''}`);
   }
 }
 async function main():Promise<void> {

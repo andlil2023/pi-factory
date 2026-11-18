@@ -39,6 +39,18 @@ function projectProgress(value: unknown) {
   if (!object(value) || !['full', 'selected'].includes(String(value.mode)) || ![value.completed, value.total, value.failed].every(n => Number.isSafeInteger(n) && (n as number) >= 0)) return undefined;
   return { mode: value.mode, completed: value.completed, total: value.total, failed: value.failed };
 }
+function projectRevisions(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((revision: unknown) => {
+    if (!object(revision) || typeof revision.at !== 'string' || typeof revision.taskId !== 'string' ||
+        (revision.reason !== 'task_too_large' && revision.reason !== 'budget_exhausted') ||
+        !Array.isArray(revision.superseded) || !Array.isArray(revision.added)) return [];
+    return [{ at: revision.at, taskId: revision.taskId, reason: revision.reason,
+      superseded: revision.superseded.filter((id: unknown): id is string => typeof id === 'string'),
+      added: revision.added.filter((id: unknown): id is string => typeof id === 'string'),
+      hasLeftoverPatch: typeof revision.leftoverPatch === 'string' && revision.leftoverPatch.length > 0 }];
+  });
+}
 function projectTask(task: TaskState, title?: string) {
   return {
     id: task.id, title: title ?? task.id, status: task.status, budgetUsed: consumedAttempts(task), lastError: task.lastError,
@@ -46,6 +58,7 @@ function projectTask(task: TaskState, title?: string) {
       number: a.number, startedAt: a.startedAt, finishedAt: a.finishedAt, outcome: a.outcome,
       phase: typeof a.phase === 'string' ? a.phase : undefined, verificationProgress: projectProgress(a.verificationProgress),
       verification: object(a.verification) && typeof a.verification.passed === 'boolean' ? { passed: a.verification.passed } : undefined,
+      flakyCount: object(a.verification) && object(a.verification.details) && Array.isArray(a.verification.details.flaky) ? a.verification.details.flaky.filter((item: unknown) => typeof item === 'string').length : 0,
       blockers: object(a.implementationReport) && Array.isArray(a.implementationReport.blockers) ? a.implementationReport.blockers.map((b: unknown) => {
         const projected = fields(b, ['kind', 'description', 'question']);
         if (object(b) && Array.isArray(b.proposedSplit)) projected.proposedSplit = b.proposedSplit.filter((x: unknown) => typeof x === 'string');
@@ -78,6 +91,7 @@ export function projectRun(state: FactoryRunState) {
       : typeof latestIntegration?.status === 'string' ? 'integration_' + latestIntegration.status
       : state.status === 'completed' ? 'awaiting_integration' : state.status,
     maxAttempts: Number.isSafeInteger(state.execution?.maxAttempts) ? state.execution?.maxAttempts : undefined,
+    autoReplans: projectRevisions(state.autoReplans),
     tasks: Object.values(state.tasks).map(task => projectTask(task, titles.get(task.id))),
     supersededTasks: (state.supersededTasks ?? []).map(entry => ({ supersededAt: entry.supersededAt, task: projectTask(entry.task) })),
     finalVerificationProgress: projectProgress(state.finalVerificationProgress),
