@@ -6,7 +6,7 @@ import type { FactoryRunState, IntegrationAttempt } from '../src/state-store.ts'
 function fixture(): { state: FactoryRunState; attempt: IntegrationAttempt } {
   const attempt: IntegrationAttempt = { number: 1, status: 'blocked', failedPhase: 'verifying', approvedAt: 'now', worktree: 'w', branch: 'b', targetBranch: 'main', targetHead: 'target', sourceHead: 'source', commit: 'merge', verification: { passed: false, details: { secret: 'feedback' } } };
   const task = { id: 'T001', title: 'one', objective: 'one', scope: 'one', acceptanceCriteria: [], dependencies: [], verification: [] };
-  return { attempt, state: { version: 1, runId: 'run', repository: '.', createdAt: 'now', updatedAt: 'now', status: 'completed', plan: { tasks: [task] }, tasks: { T001: { id: 'T001', status: 'completed', attempts: [] } }, git: { worktree: 'w', runBranch: 'run', targetBranch: 'main', baseCommit: 'base', expectedHead: 'source' }, execution: { maxAttempts: 3, configurationFingerprint: 'f' }, finalVerification: { passed: true, details: {}, checkedAt: 'now' }, integrations: [attempt] } };
+  return { attempt, state: { version: 1, runId: 'run', repository: '.', createdAt: 'now', updatedAt: 'now', status: 'completed', plan: { tasks: [task] }, tasks: { T001: { id: 'T001', status: 'completed', attempts: [] } }, git: { worktree: 'w', runBranch: 'run', targetBranch: 'main', baseCommit: 'target', expectedHead: 'source' }, execution: { maxAttempts: 3, configurationFingerprint: 'f' }, finalVerification: { passed: true, details: {}, checkedAt: 'now' }, integrations: [attempt] } };
 }
 
 test('integration repair eligibility requires actionable persisted rejection and available budgets', () => {
@@ -21,6 +21,7 @@ test('integration repair eligibility requires actionable persisted rejection and
   delete attempt.commit; assert.equal(eligible(), false); attempt.commit = 'merge';
   attempt.targetBranch = 'other'; assert.equal(eligible(), false); attempt.targetBranch = 'main';
   attempt.sourceHead = 'other'; assert.equal(eligible(), false); attempt.sourceHead = 'source';
+  state.git!.baseCommit = 'earlier'; assert.equal(eligible(), false, 'target advanced past the run base'); state.git!.baseCommit = 'target';
   state.status = 'running'; assert.equal(eligible(), false); state.status = 'completed';
   attempt.failedPhase = 'setup'; assert.equal(eligible(), false);
   attempt.failedPhase = 'verifying'; attempt.verification!.passed = true; assert.equal(eligible(), false);
@@ -96,6 +97,7 @@ test('integration repair creates an isolated revision with fresh ID and no copie
   assert.deepEqual(result.planRevisions, [{ replacedAt: 'later', plan: before.plan }]);
   assert.deepEqual(result.integrationRepairs, [{ at: 'later', taskId: 'T011', integrationAttempt: 1 }]);
   assert.deepEqual(result.tasks.T011, { id: 'T011', status: 'pending', attempts: [] });
+  assert.equal(result.status, 'paused', 'a snapshot with a pending task must be resumable');
   const added = (result.plan as { tasks: Array<{ id: string; dependencies?: string[] }> }).tasks.at(-1)!;
   assert.equal(added.id, 'T011'); assert.deepEqual(added.dependencies, ['T001', 'T005']);
   assert.equal(JSON.stringify(result.integrationRepairs).includes('feedback'), false);

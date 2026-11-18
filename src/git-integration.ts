@@ -40,7 +40,8 @@ async function assertPinnedRefs(state: FactoryRunState, record: IntegrationAttem
   const observed = await validateRunGitState(state, state.repository);
   if (observed.targetHead !== record.targetHead || state.git!.expectedHead !== record.sourceHead || state.git!.targetBranch !== record.targetBranch) throw new Error('Integration source or target moved; prepare a new candidate');
 }
-async function assertCandidate(state: FactoryRunState, record: IntegrationAttempt): Promise<void> {
+/** The candidate is the registered, clean checkout of the recorded merge of the pinned target and source. */
+export async function assertCandidate(state: FactoryRunState, record: IntegrationAttempt): Promise<void> {
   if (!Number.isSafeInteger(record.number) || record.number < 1 || record.branch !== `factory-integration/${state.runId}-${record.number}`) throw new Error('Invalid integration branch metadata');
   if (!record.commit || !/^[a-f0-9]{40,64}$/.test(record.commit)) throw new Error('Missing integration candidate commit');
   const repo = await realpath(state.repository);

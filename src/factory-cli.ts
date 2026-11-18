@@ -15,7 +15,7 @@ import { isDeepStrictEqual } from 'node:util';
 import type { ReviewRouting } from './review-routing.ts';
 import { validateUiEvidenceCommand, type UiEvidenceCommand } from './ui-evidence.ts';
 import { acquireRunLock } from './run-lock.ts';
-import { prepareIntegration, publishIntegration, publishPullRequest, reconcilePullRequest, hasGitRemote, type IntegrationOptions } from './git-integration.ts';
+import { assertCandidate, prepareIntegration, publishIntegration, publishPullRequest, reconcilePullRequest, hasGitRemote, type IntegrationOptions } from './git-integration.ts';
 import { captureRunGitState, configurationFingerprint, fingerprintForRun, prepareRunResume, validateRunGitState, assertRunCheckpoint, MAX_GUIDANCE_LENGTH } from './run-recovery.ts';
 import { amendRunPlan } from './plan-amendment.ts';
 import { reviewedPlan, planningContext, type PlanReviewReport, type ReviewedPlan } from './plan-review.ts';
@@ -559,6 +559,9 @@ async function integrateCommand(flags:Record<string,string|boolean>):Promise<voi
       while (flags.publish!==true && integrationRepairEligible(state,record,maxRepairs)) {
         const observed=await validateRunGitState(state,repository);
         if (observed.targetHead!==record.targetHead) break;
+        // A rejection is evidence only for the candidate it was produced on. A check that changed the candidate voids it.
+        try { await assertCandidate(state,record); }
+        catch (error) { console.log(`Integration ${record.number} is not repaired automatically: its candidate failed the integrity check (${error instanceof Error?error.message.split('\n')[0]:'unknown error'})`); break; }
         state=addIntegrationRepair(state,record,maxRepairs);
         const repair=state.integrationRepairs!.at(-1)!;
         await store.save(state);

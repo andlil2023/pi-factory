@@ -14,6 +14,8 @@ export function integrationRepairEligible(state: FactoryRunState, candidate: Int
   if (attempt.status !== 'blocked' || !attempt.commit || !state.git
     || attempt.targetBranch !== state.git.targetBranch || attempt.sourceHead !== state.git.expectedHead
     || !attempt.targetHead || !attempt.sourceHead) return false;
+  // A target that advanced past the run's base put changes into the candidate that the run worktree does not have.
+  if (attempt.targetHead !== state.git.baseCommit) return false;
   // A blocked reviewer is an escalation, not an actionable changes request.
   if (attempt.reviews?.some(review => review.verdict === 'blocked')) return false;
   if (attempt.failedPhase === 'verifying') return attempt.verification?.passed === false;
@@ -43,6 +45,9 @@ export function addIntegrationRepair(state: FactoryRunState, attempt: Integratio
     verification: ['Run focused tests for the integration feedback']
   };
   const result = structuredClone(state);
+  // Must stay resumable if the process stops before the repair starts: a completed run cannot be resumed,
+  // and a run with a pending task cannot be integrated.
+  result.status = 'paused';
   (result.plan as { tasks: PlannedTask[] }).tasks.push(task);
   result.planRevisions = [...(result.planRevisions ?? []), { replacedAt: now, plan: structuredClone(state.plan) }];
   result.tasks[id] = { id, status: 'pending', attempts: [] };
