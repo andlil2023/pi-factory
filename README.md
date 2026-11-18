@@ -175,6 +175,26 @@ Publication requires the exact reviewed SHA, unchanged source/target tips, uncha
 
 An opened PR is recorded as `pr-opened`, not as a completed merge. **The factory does not merge PRs or enable GitHub auto-merge.** Branch protection and human review still apply. If the base or PR head advances after publication, the PR no longer necessarily represents the reviewed candidate; review it again before merging. Automatic merging requires a future server-side merge-queue gate verifying the reviewed tree. Push/PR creation failures after publication starts leave `pr-publishing` for manual reconciliation; inspect the remote branch and PRs before taking further action. A PR may already have been created even if post-creation checks fail, and the factory does not close it. No automatic retry, deletion, or rollback is performed.
 
+After the PR is merged externally, reconcile its recorded GitHub status:
+
+```powershell
+npm run factory -- integrate --repo PATH --run RUN_ID --reconcile
+```
+
+Reconciliation reads GitHub; it does not merge the PR or perform GitHub writes. It requires neither `--approve` nor a configuration file, and cannot be combined with `--publish`, `--candidate`, `--new-attempt`, or `--guidance`. It uses the repository integration and run locks; add `--recover-lock` when appropriate.
+
+For a completed run whose latest integration is `pr-opened`, the results are:
+
+| GitHub result | Exit code | Factory state effect |
+| --- | --- | --- |
+| Merged and matches the reviewed candidate | 0 | Records `published` status and phase, the GitHub merge time as `publishedAt`, and the merge commit SHA. |
+| Still open | 0 | Remains `pr-opened`; no state change. |
+| Closed without merging | 1 | Rejected; no state change. |
+| Merged but not the reviewed candidate | 1 | Rejected; no state change. The recorded URL, base, head and head SHA must match, and the merge time and merge SHA must be valid. |
+| GitHub read fails or returns invalid data | 1 | Rejected; no state change. Raw GitHub output is not exposed. |
+
+If the latest integration is already `published`, reconciliation exits 0 without a GitHub read or state change. Other ineligible runs exit 1 without changing state.
+
 Preparation/publication use both the run lock and a repository-wide integration lock. These coordinate this factory locally; **do not concurrently check out branches or change refs/worktrees using other tools**. The factory checks before/after Git operations, but its PID locks do not lock out external Git clients. A crash after publication starts leaves `publishing` state and requires manual reconciliation; it will not blindly retry or roll back a possibly updated target. Failed pre-publication checks never intentionally update the target.
 
 **Not implemented:** automatic conflict resolution, adoption of manually resolved/amended candidates, automatic worktree cleanup, or adding tasks to a completed run. Conflicted candidates are preserved diagnostic workspaces in this version, not resumable implementation tasks. Publication refuses them; use a separately authorized resolution workflow and a fresh candidate (within budget), or perform manual integration outside the factory.
