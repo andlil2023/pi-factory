@@ -28,7 +28,7 @@ export interface IntegrationOptions {
   /** Publication accepts the preparation's passing verification of the identical Git tree instead of rerunning the commands. */
   reuseVerification?: boolean;
   /** Dependency injection for independently tested GitHub transport. */
-  github?: Pick<typeof github, 'githubDestination' | 'remoteHead' | 'pushCandidate' | 'createPullRequest' | 'verifyPullRequest'>;
+  github?: Pick<typeof github, 'githubDestination' | 'remoteHead' | 'pushCandidate' | 'createPullRequest' | 'verifyPullRequest' | 'readPullRequest'>;
 }
 
 function eligible(state: FactoryRunState, options: IntegrationOptions): void {
@@ -250,6 +250,46 @@ export async function publishIntegration(store: StateStore, state: FactoryRunSta
     await store.save(state);
     throw error;
   }
+  return record;
+}
+
+/** Caller holds the repository integration and run locks. This operation only reads GitHub. */
+export async function reconcilePullRequest(store: StateStore, state: FactoryRunState, api: Pick<typeof github, 'readPullRequest'> = github): Promise<IntegrationAttempt> {
+  const record = state.integrations?.at(-1);
+  if (record?.status === 'published') return record;
+  const pr = record?.pullRequest;
+  if (state.status !== 'completed' || record?.status !== 'pr-opened' || !pr?.url) {
+    throw new Error(`Reconciliation requires a completed run and an open PR (run: ${state.status}, integration: ${record?.status ?? 'none'})`);
+  }
+  let data: unknown;
+  try {
+    data = await api.readPullRequest(state.repository, pr.repository, pr.url);
+    if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error();
+    const value = data as Record<string, unknown>;
+    if (!['OPEN', 'CLOSED', 'MERGED'].includes(value.state as string) ||
+        typeof value.url !== 'string' || typeof value.baseRefName !== 'string' ||
+        typeof value.headRefName !== 'string' || typeof value.headRefOid !== 'string' ||
+        !(value.mergedAt === null || typeof value.mergedAt === 'string') ||
+        !(value.mergeCommit === null || (typeof value.mergeCommit === 'object' && !Array.isArray(value.mergeCommit) && typeof (value.mergeCommit as Record<string, unknown>).oid === 'string'))) throw new Error();
+  } catch {
+    throw new Error('GitHub could not be read');
+  }
+  const value = data as { state: 'OPEN' | 'CLOSED' | 'MERGED'; url: string; baseRefName: string; headRefName: string; headRefOid: string; mergedAt: string | null; mergeCommit: { oid: string } | null };
+  if (value.state === 'OPEN') return record;
+  if (value.state === 'CLOSED') throw new Error('Pull request was closed without merging');
+  if (value.url !== pr.url || value.baseRefName !== pr.base || value.headRefName !== pr.head ||
+      value.headRefOid !== pr.headSha || pr.base !== record.targetBranch || pr.baseSha !== record.targetHead ||
+      pr.head !== record.branch || pr.headSha !== record.commit ||
+      !value.mergedAt || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(value.mergedAt) || !Number.isFinite(Date.parse(value.mergedAt)) ||
+      !value.mergeCommit || !/^[a-f0-9]{40,64}$/.test(value.mergeCommit.oid)) {
+    throw new Error('Merged pull request is not the reviewed candidate');
+  }
+  record.status = 'published';
+  record.phase = 'published';
+  record.phaseUpdatedAt = new Date().toISOString();
+  record.publishedAt = value.mergedAt;
+  pr.mergeCommit = value.mergeCommit.oid;
+  await store.save(state);
   return record;
 }
 

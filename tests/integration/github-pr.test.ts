@@ -1,12 +1,32 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { githubDestination, pushCandidate, remoteHead, type GitHubDestination } from '../../src/github-pr.ts';
+import { delimiter, join } from 'node:path';
+import { githubDestination, pushCandidate, readPullRequest, remoteHead, type GitHubDestination } from '../../src/github-pr.ts';
 
 function git(cwd: string, ...args: string[]): string { return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim(); }
+
+test('readPullRequest requests the recorded PR fields without a shell or raw output', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'factory-gh-read-'));
+  const previousPath = process.env.PATH;
+  t.after(async () => { if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath; await rm(dir, { recursive: true, force: true }); });
+  // On Windows use Node itself as gh.exe; it executes the first argument, the local 'pr' script.
+  await writeFile(join(dir, 'pr'), 'const fs = require("node:fs");\nfs.appendFileSync("calls", JSON.stringify(["pr", ...process.argv.slice(2)]) + "\\n");\nprocess.stdout.write(JSON.stringify({state:"MERGED", mergedAt:null, marker:"raw-secret"}));\n');
+  if (process.platform === 'win32') {
+    await copyFile(process.execPath, join(dir, 'gh.exe'));
+  } else {
+    const gh = join(dir, 'gh');
+    await writeFile(gh, '#!/bin/sh\nexec node "$@"\n');
+    await chmod(gh, 0o755);
+  }
+  process.env.PATH = `${dir}${delimiter}${previousPath ?? ''}`;
+  const url = 'https://github.com/owner/repo/pull/1;echo shell-injection';
+  assert.deepEqual(await readPullRequest(dir, 'owner/repo', url), { state: 'MERGED', mergedAt: null, marker: 'raw-secret' });
+  const calls = (await readFile(join(dir, 'calls'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+  assert.deepEqual(calls, [['pr', 'view', url, '--repo', 'github.com/owner/repo', '--json', 'state,mergedAt,mergeCommit,baseRefName,headRefName,headRefOid,url']]);
+});
 
 test('destination requires a same-branch GitHub upstream and matching push destination', async t => {
   const dir = await mkdtemp(join(tmpdir(), 'factory-github-config-'));

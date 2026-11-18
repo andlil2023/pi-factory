@@ -15,7 +15,7 @@ import { isDeepStrictEqual } from 'node:util';
 import type { ReviewRouting } from './review-routing.ts';
 import { validateUiEvidenceCommand, type UiEvidenceCommand } from './ui-evidence.ts';
 import { acquireRunLock } from './run-lock.ts';
-import { prepareIntegration, publishIntegration, publishPullRequest, hasGitRemote, type IntegrationOptions } from './git-integration.ts';
+import { prepareIntegration, publishIntegration, publishPullRequest, reconcilePullRequest, hasGitRemote, type IntegrationOptions } from './git-integration.ts';
 import { captureRunGitState, configurationFingerprint, fingerprintForRun, prepareRunResume, validateRunGitState, assertRunCheckpoint, MAX_GUIDANCE_LENGTH } from './run-recovery.ts';
 import { amendRunPlan } from './plan-amendment.ts';
 import { reviewedPlan, planningContext, type PlanReviewReport, type ReviewedPlan } from './plan-review.ts';
@@ -489,6 +489,27 @@ async function executeRun(store:StateStore,state:FactoryRunState,config:Config):
   if(finished.status!=='completed') process.exitCode=1;
 }
 async function integrateCommand(flags:Record<string,string|boolean>):Promise<void> {
+  if (flags.reconcile !== undefined) {
+    for (const name of ['publish', 'candidate', 'new-attempt', 'guidance']) {
+      if (flags[name] !== undefined) throw new Error(`--reconcile cannot be combined with --${name}`);
+    }
+    const repository=resolve(required(flags,'repo'));
+    const runId=required(flags,'run');
+    const store=new StateStore(repository);
+    const releaseRepository=await acquireRunLock(store.directory,'repository-integration',flags['recover-lock']===true);
+    try {
+      const releaseRun=await acquireRunLock(store.directory,runId,flags['recover-lock']===true);
+      try {
+        const state=await store.load(runId);
+        if (await realpath(repository)!==await realpath(state.repository)) throw new Error('Run repository mismatch');
+        const alreadyPublished=state.integrations?.at(-1)?.status==='published';
+        const record=await reconcilePullRequest(store,state);
+        console.log(`Integration ${record.number}: ${record.status}${alreadyPublished ? ' (already published)' : record.status==='pr-opened' ? ' (pull request still open)' : ''}`);
+        if (record.pullRequest?.url) console.log(`Pull request: ${record.pullRequest.url}`);
+      } finally { await releaseRun(); }
+    } finally { await releaseRepository(); }
+    return;
+  }
   if (flags.approve !== true) throw new Error('Integration requires --approve; preparation and publication are separately approved');
   if (flags.publish === true && flags.guidance !== undefined) throw new Error('--guidance is only valid when preparing an integration candidate');
   const integrationGuidance = await guidanceFrom(flags);
@@ -604,7 +625,7 @@ async function main():Promise<void> {
   if(command==='replan') return replanCommand(flags);
   if(command==='amend') return amendCommand(flags);
   if(command==='integrate') return integrateCommand(flags);
-  console.log('Usage:\n  npm run factory -- doctor [--config FILE] [--repo PATH]\n  npm run factory -- run-list --repo PATH\n  npm run factory -- plan --repo PATH --objective FILE --output FILE\n  npm run factory -- run --repo PATH --plan FILE --approve\n  npm run factory -- status --repo PATH --run RUN_ID\n  npm run factory -- resume --repo PATH --run RUN_ID --approve [--retry-task TASK_ID [--guidance FILE]] [--recover-lock]\n  npm run factory -- replan --repo PATH --run RUN_ID --output FILE [--guidance FILE]\n  npm run factory -- amend --repo PATH --run RUN_ID --plan FILE --approve\n  npm run factory -- integrate --repo PATH --run RUN_ID --approve [--new-attempt] [--guidance FILE]\n  npm run factory -- integrate --repo PATH --run RUN_ID --publish --candidate SHA --approve');
+  console.log('Usage:\n  npm run factory -- doctor [--config FILE] [--repo PATH]\n  npm run factory -- run-list --repo PATH\n  npm run factory -- plan --repo PATH --objective FILE --output FILE\n  npm run factory -- run --repo PATH --plan FILE --approve\n  npm run factory -- status --repo PATH --run RUN_ID\n  npm run factory -- resume --repo PATH --run RUN_ID --approve [--retry-task TASK_ID [--guidance FILE]] [--recover-lock]\n  npm run factory -- replan --repo PATH --run RUN_ID --output FILE [--guidance FILE]\n  npm run factory -- amend --repo PATH --run RUN_ID --plan FILE --approve\n  npm run factory -- integrate --repo PATH --run RUN_ID --approve [--new-attempt] [--guidance FILE]\n  npm run factory -- integrate --repo PATH --run RUN_ID --publish --candidate SHA --approve\n  npm run factory -- integrate --repo PATH --run RUN_ID --reconcile [--recover-lock]');
   if(command) process.exitCode=1;
 }
 main().catch(e=>{console.error(e instanceof Error?e.stack:e);process.exitCode=1;});

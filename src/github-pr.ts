@@ -57,6 +57,11 @@ export async function createPullRequest(cwd: string, destination: GitHubDestinat
   return url;
 }
 
+/** Read external PR data as untrusted JSON; callers must validate it before use. */
+export async function readPullRequest(cwd: string, repository: string, url: string): Promise<unknown> {
+  return JSON.parse(await command(cwd, 'gh', ['pr', 'view', url, '--repo', `github.com/${repository}`, '--json', 'state,mergedAt,mergeCommit,baseRefName,headRefName,headRefOid,url']));
+}
+
 export async function verifyPullRequest(cwd: string, destination: GitHubDestination, url: string): Promise<void> {
   const result = JSON.parse(await command(cwd, 'gh', ['pr', 'view', url, '--repo', `github.com/${destination.repository}`, '--json', 'state,baseRefName,baseRefOid,headRefName,headRefOid']));
   if (result.state !== 'OPEN' || result.baseRefName !== destination.base || result.baseRefOid !== destination.baseSha || result.headRefName !== destination.head || result.headRefOid !== destination.headSha) throw new Error('GitHub pull request no longer matches the reviewed refs');
