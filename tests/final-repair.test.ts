@@ -4,6 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { StateStore } from '../src/state-store.ts';
+import { FactoryEventBus, type FactoryEvent } from '../src/event-bus.ts';
 import { Orchestrator, type OrchestratorAdapters, type PlannedTask, type TaskContext } from '../src/orchestrator.ts';
 import { autoReplanCandidate } from '../src/auto-replan.ts';
 import { buildAttemptFeedback, buildFinalFailureFeedback } from '../src/attempt-feedback.ts';
@@ -104,6 +105,91 @@ test('a final failure that does not reproduce withdraws the repair task instead 
   assert.deepEqual(tasks.map(item => item.id), ['T001', 'T002']);
   assert.equal(saved.finalRepairs![0].withdrawn, true);
   assert.deepEqual(saved.supersededTasks?.map(entry => entry.task.id), ['T003'], 'the attempt history is kept and the ID is retired');
+});
+
+test('a pending integration repair receives feedback and uses full verification', async t => {
+  const { store, state, tasks } = await fixture(t);
+  state.tasks.T001.status = 'completed';
+  state.tasks.T002.status = 'completed';
+  const repair = task('T003', ['T001', 'T002']);
+  tasks.push(repair);
+  (state.plan as { tasks: PlannedTask[] }).tasks.push(structuredClone(repair));
+  state.tasks.T003 = { id: 'T003', status: 'pending', attempts: [] };
+  state.integrations = [{ number: 1, status: 'blocked', approvedAt: 'now', worktree: 'worktree', branch: 'candidate', targetBranch: 'main', targetHead: 'target', sourceHead: 'source', verification: failedFinal }];
+  state.integrationRepairs = [{ at: 'now', taskId: 'T003', integrationAttempt: 1 }];
+  let seen: TaskContext | undefined;
+  const result = await new Orchestrator(store, {
+    implement: async context => { seen = context; return { outcome: 'implemented', report: {} }; },
+    verify: async context => { assert.equal(context.fullVerification, true); return { passed: true, details: {} }; },
+    review: async () => [{ reviewer: 'code', verdict: 'approved', report: {} }],
+    finalVerify: async () => ({ passed: true, details: {} })
+  }).execute(state, tasks);
+  assert.equal(result.status, 'completed');
+  assert.equal(seen?.attempt, 1);
+  assert.equal(seen?.feedback?.open.reason, 'Integration candidate rejected');
+  assert.equal(seen?.feedback?.open.failedChecks[0].logFile, '/logs/FINAL-1-1.log');
+  assert.match(seen!.feedback!.notes[0], /merged result/);
+  assert.equal(result.tasks.T003.status, 'completed');
+});
+
+test('integration repair keeps rejection feedback after a retryable timeout and does not withdraw failed verification', async t => {
+  const { store, state, tasks } = await fixture(t);
+  state.tasks.T001.status = 'completed';
+  state.tasks.T002.status = 'completed';
+  tasks.push(task('T003', ['T001', 'T002']));
+  (state.plan as { tasks: PlannedTask[] }).tasks.push(structuredClone(tasks[2]));
+  state.tasks.T003 = { id: 'T003', status: 'pending', attempts: [] };
+  state.execution = { maxAttempts: 1, maxInfraRetries: 1, configurationFingerprint: 'test' };
+  state.integrations = [{ number: 1, status: 'blocked', approvedAt: 'now', worktree: 'worktree', branch: 'candidate', targetBranch: 'main', targetHead: 'target', sourceHead: 'source', verification: failedFinal }];
+  state.integrationRepairs = [{ at: 'now', taskId: 'T003', integrationAttempt: 1 }];
+  const { AgentExecutionError } = await import('../src/agent-error.ts');
+  let changesChecked = false;
+  const result = await new Orchestrator(store, {
+    implement: async context => {
+      assert.equal(context.feedback?.open.failedChecks[0].logFile, '/logs/FINAL-1-1.log');
+      if (context.attempt === 1) throw new AgentExecutionError('implementer', true, 'PI timed out');
+      assert.ok(context.feedback?.notes.some(note => /timed out/.test(note)));
+      return { outcome: 'implemented', report: {} };
+    },
+    verify: async () => ({ passed: false, details: {} }),
+    hasChanges: async () => { changesChecked = true; return false; },
+    review: async () => { assert.fail('failed verification must not be reviewed'); }
+  }, { maxAttempts: 1 }).execute(state, tasks);
+  assert.equal(result.status, 'blocked');
+  assert.equal(changesChecked, false);
+  assert.equal(result.integrationRepairs?.[0].withdrawn, undefined);
+  assert.equal(result.tasks.T003.attempts.length, 2);
+});
+
+test('an unchanged passing integration repair is withdrawn and recorded', async t => {
+  const { store, state } = await fixture(t);
+  state.tasks.T001.status = 'completed';
+  state.tasks.T002.status = 'completed';
+  const tasks = (state.plan as { tasks: PlannedTask[] }).tasks;
+  tasks.push(task('T003', ['T001', 'T002']));
+  state.tasks.T003 = { id: 'T003', status: 'pending', attempts: [] };
+  state.integrations = [{ number: 1, status: 'blocked', approvedAt: 'now', worktree: 'worktree', branch: 'candidate', targetBranch: 'main', targetHead: 'target', sourceHead: 'source', verification: failedFinal }];
+  state.integrationRepairs = [{ at: 'now', taskId: 'T003', integrationAttempt: 1 }];
+  const events: Readonly<FactoryEvent>[] = [];
+  const bus = new FactoryEventBus({ runId: state.runId, consoleOutput: false });
+  bus.subscribe(event => events.push(event));
+  const result = await new Orchestrator(store, {
+    implement: async () => ({ outcome: 'implemented', report: {} }),
+    verify: async context => { assert.equal(context.fullVerification, true); return { passed: true, details: {} }; },
+    hasChanges: async () => false,
+    review: async () => { assert.fail('withdrawn repair must not be reviewed'); },
+    checkpoint: async () => { assert.fail('withdrawn repair must not be checkpointed'); },
+    finalVerify: async () => ({ passed: true, details: {} })
+  }, { events: bus }).execute(state, tasks);
+  assert.equal(result.status, 'completed');
+  const saved = await store.load(state.runId);
+  assert.equal(saved.integrationRepairs?.[0].withdrawn, true);
+  assert.deepEqual(Object.keys(saved.tasks), ['T001', 'T002']);
+  assert.deepEqual((saved.plan as { tasks: PlannedTask[] }).tasks.map(item => item.id), ['T001', 'T002']);
+  assert.deepEqual(saved.supersededTasks?.map(entry => entry.task.id), ['T003']);
+  assert.equal(saved.supersededTasks?.[0].task.attempts.length, 1);
+  assert.equal((saved.planRevisions?.[0].plan as { tasks: PlannedTask[] }).tasks.length, 3);
+  assert.ok(events.some(event => event.type === 'PLAN_REVISED' && event.taskId === 'T003'));
 });
 
 test('a repair attempt that only timed out does not hide the failed final checks', async t => {
