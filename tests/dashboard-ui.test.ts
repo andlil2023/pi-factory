@@ -10,6 +10,7 @@ import { createDashboardServer } from '../src/dashboard-server.ts';
 
 test('refresh restores run focus or falls back when the run disappears', async () => {
   let active: Element | null = null;
+  let focusOptions: unknown;
   class Element {
     children: Element[] = [];
     dataset: Record<string, string> = {};
@@ -19,7 +20,7 @@ test('refresh restores run focus or falls back when the run disappears', async (
     append(...children: Element[]) { this.children.push(...children); }
     replaceChildren() { if (this.contains(active)) active = null; this.children = []; }
     contains(element: Element | null): boolean { return this === element || this.children.some(child => child.contains(element)); }
-    focus() { active = this; }
+    focus(options?: unknown) { active = this; focusOptions = options; }
     addEventListener() {}
     setAttribute() {}
   }
@@ -34,6 +35,7 @@ test('refresh restores run focus or falls back when the run disappears', async (
   elements.runs.children[1].children[0].focus();
   await interval();
   assert.equal(active, elements.runs.children[1].children[0]);
+  assert.deepEqual({ ...(focusOptions as object) }, { preventScroll: true }, 'restoring focus must not scroll the page');
   runs = [runs[0]];
   await interval();
   assert.equal(active, elements.refresh);
