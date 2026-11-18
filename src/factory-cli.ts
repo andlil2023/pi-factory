@@ -36,8 +36,9 @@ interface Config {
   uiEvidence?: { command: UiEvidenceCommand };
   /** `maxAutoReplans`: plan revisions the factory may apply without an operator per run; 0 always stops. Default 2.
    * `maxFinalRepairs`: repair tasks added after a failed final verification; 0 blocks at once. Default 2.
+   * `maxIntegrationRepairs`: repair tasks added after a blocked integration; 0 disables repairs. Default 2.
    * `reuseVerification`: final verification and publication accept an earlier passing full verification of the identical content instead of rerunning it. Default true. */
-  execution?: { maxAttempts?: number; maxInfraRetries?: number; verificationReruns?: number; maxAutoReplans?: number; maxFinalRepairs?: number; reuseVerification?: boolean };
+  execution?: { maxAttempts?: number; maxInfraRetries?: number; verificationReruns?: number; maxAutoReplans?: number; maxFinalRepairs?: number; maxIntegrationRepairs?: number; reuseVerification?: boolean };
   verification?: Array<{ executable: string; args?: string[]; timeoutMs?: number }>;
   verificationSelection?: SelectionConfig;
   /** Trusted commands that prepare every fresh run or integration worktree, for example a dependency install. */
@@ -101,6 +102,8 @@ async function configFrom(flags:Record<string,string|boolean>):Promise<Config> {
   if (!Number.isSafeInteger(maxAutoReplans) || maxAutoReplans < 0 || maxAutoReplans > 10) throw new Error('Invalid execution.maxAutoReplans; use 0-10');
   const maxFinalRepairs = config.execution?.maxFinalRepairs ?? 2;
   if (!Number.isSafeInteger(maxFinalRepairs) || maxFinalRepairs < 0 || maxFinalRepairs > 5) throw new Error('Invalid execution.maxFinalRepairs; use 0-5');
+  const maxIntegrationRepairs = config.execution?.maxIntegrationRepairs === undefined ? 2 : config.execution.maxIntegrationRepairs;
+  if (!Number.isSafeInteger(maxIntegrationRepairs) || maxIntegrationRepairs < 0 || maxIntegrationRepairs > 5) throw new Error('Invalid execution.maxIntegrationRepairs; use 0-5');
   if (config.execution?.reuseVerification !== undefined && typeof config.execution.reuseVerification !== 'boolean') throw new Error('Invalid execution.reuseVerification; use true or false');
   const maxReviewRounds = config.planning?.maxReviewRounds ?? 2;
   if (!Number.isSafeInteger(maxReviewRounds) || maxReviewRounds < 0 || maxReviewRounds > 5) throw new Error('Invalid planning.maxReviewRounds; use 0-5');

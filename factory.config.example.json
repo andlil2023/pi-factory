@@ -32,6 +32,7 @@
     "verificationReruns": 1,
     "maxAutoReplans": 2,
     "maxFinalRepairs": 2,
+    "maxIntegrationRepairs": 2,
     "reuseVerification": true
   },
   "planning": {
