@@ -28,6 +28,8 @@ test('dashboard reader projects state, isolates unavailable runs, and limits eve
     const good = await reader.readRun('good'); assert.ok(good.available);
     assert.equal(good.run.label, 'good');
     assert.equal(good.run.objectiveSummary, undefined);
+    assert.deepEqual(good.run.autoReplans, []);
+    assert.equal(good.run.tasks[0].attempts[0].flakyCount, 0);
     assert.equal(good.run.tasks[0].title, 'T001');
     assert.equal(good.run.tasks[0].budgetUsed, 1);
     assert.equal(good.run.tasks[0].attempts[0].verification?.passed, false);
@@ -35,6 +37,24 @@ test('dashboard reader projects state, isolates unavailable runs, and limits eve
     assert.equal(good.run.tasks[0].attempts[1].blockers[0].description, 'choose');
     assert.equal(good.run.supersededTasks[0].task.id, 'T001');
     assert.doesNotMatch(JSON.stringify(good), /SECRET_/);
+    const revisions = [
+      { at: 'one', taskId: 'T001', reason: 'task_too_large', superseded: ['T001', 4], added: ['T002', null], leftoverPatch: '/secret/leftover.patch' },
+      { at: 'two', taskId: 'T002', reason: 'budget_exhausted', superseded: ['T002'], added: ['T003'] },
+      { at: 'three', taskId: 'T003', reason: 'invalid', superseded: [], added: [] }
+    ];
+    const flakyTask = { ...task, attempts: [
+      { number: 1, startedAt: 'a', verification: { passed: true, details: { flaky: ['secret command one', 42, 'secret command two'] } } },
+      { number: 2, startedAt: 'b', verification: { passed: true, details: { flaky: 'secret command three' } } },
+      { number: 3, startedAt: 'c' }
+    ] };
+    await writeFile(join(dir, 'revisions.json'), JSON.stringify({ ...state, runId: 'revisions', autoReplans: revisions, tasks: { T001: flakyTask } }));
+    const revised = await reader.readRun('revisions'); assert.ok(revised.available);
+    assert.deepEqual(revised.run.autoReplans, [
+      { at: 'one', taskId: 'T001', reason: 'task_too_large', superseded: ['T001'], added: ['T002'], hasLeftoverPatch: true },
+      { at: 'two', taskId: 'T002', reason: 'budget_exhausted', superseded: ['T002'], added: ['T003'], hasLeftoverPatch: false }
+    ]);
+    assert.deepEqual(revised.run.tasks[0].attempts.map(a => a.flakyCount), [2, 0, 0]);
+    assert.doesNotMatch(JSON.stringify(revised), /leftover\.patch|secret command/);
     // Even malformed optional fields must not bypass the projection allowlist.
     const malformed = { ...state, runId: 'malformed', execution: { maxAttempts: { prompt: 'SECRET_CONFIG' } }, finalVerification: { passed: true, checkedAt: { artifact: 'SECRET_ARTIFACT' } }, integrations: [{ number: { prompt: 'SECRET_PROMPT' }, status: { artifact: 'SECRET_ARTIFACT' }, error: { stdout: 'SECRET_OUTPUT' }, reviews: [{ reviewer: { prompt: 'SECRET_PROMPT' }, verdict: { artifact: 'SECRET_ARTIFACT' } }] }] };
     await writeFile(join(dir, 'malformed.json'), JSON.stringify(malformed));

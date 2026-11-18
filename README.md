@@ -6,6 +6,8 @@ Start with the [operator quick-start](docs/operator-quick-start.md) for a planni
 
 ## Read-only dashboard
 
+The dashboard shows automatic plan revisions and highlights attempts that passed verification only on a rerun.
+
 Start the dashboard separately from the factory (Node with `--experimental-strip-types` support is required):
 
 ```sh

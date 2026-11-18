@@ -100,6 +100,7 @@ function renderTask(task, maxAttempts, openKeys, key = task.id) {
       row.append(node('p', `${attempt.startedAt}${attempt.finishedAt ? ` → ${attempt.finishedAt}` : ' · In progress'}`, 'task-meta'));
       const checks = node('div', undefined, 'checks');
       checks.append(badge(attempt.outcome || 'running'), verification(attempt.verification, 'Verification'));
+      if (attempt.flakyCount > 0) checks.append(node('span', `Passed on rerun: ${attempt.flakyCount}`, 'task-meta'));
       row.append(checks);
       for (const blocker of attempt.blockers || []) {
         issue(row, blocker.kind || 'Blocker', blocker.description, blocker.question);
@@ -194,6 +195,19 @@ function showDetails(entry) {
   verificationProgress(checks, run.finalVerificationProgress);
   if (run.finalVerification?.checkedAt) checks.append(node('span', run.finalVerification.checkedAt, 'task-meta'));
   details.append(checks);
+  if (run.autoReplans?.length) {
+    const revisions = disclosure(`Automatic plan revisions (${run.autoReplans.length})`, 'revisions', openKeys);
+    for (const revision of run.autoReplans) {
+      const row = node('div', undefined, 'attempt');
+      const reason = revision.reason === 'budget_exhausted' ? 'Repair budget exhausted' : 'Task too large';
+      row.append(node('p', `Time: ${revision.at}`), node('p', `Stopped task: ${revision.taskId}`),
+        node('p', `Reason: ${reason}`), node('p', `Superseded: ${revision.superseded.join(' · ')}`),
+        node('p', `Added: ${revision.added.join(' · ')}`));
+      if (revision.hasLeftoverPatch) row.append(node('p', 'Leftover patch saved.', 'task-meta'));
+      revisions.append(row);
+    }
+    details.append(revisions);
+  }
   details.append(node('h3', 'Tasks', 'subheading'));
   const list = node('div', undefined, 'task-list');
   // Keep failures and current work above completed tasks without hiding any tasks.
