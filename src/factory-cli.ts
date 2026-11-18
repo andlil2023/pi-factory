@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { FactoryEventBus } from './event-bus.ts';
 import { readFile, writeFile, mkdir, realpath, access, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';

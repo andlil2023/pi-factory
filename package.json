@@ -1,8 +1,26 @@
 {
   "name": "pi-factory",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=24.12.0"
+  },
+  "bin": {
+    "pi-factory": "bin/pi-factory.js"
+  },
+  "files": [
+    "bin/pi-factory.js",
+    "src/**/*.ts",
+    "src/dashboard/*.html",
+    "src/dashboard/*.css",
+    "src/dashboard/*.js",
+    "agents/*.md",
+    "contracts/*.json",
+    "examples/objective.md",
+    "factory.config.example.json",
+    ".pi/skills/*/SKILL.md",
+    "AGENTS.md"
+  ],
   "scripts": {
     "test": "node --experimental-strip-types --test tests/*.test.ts tests/integration/*.test.ts",
     "check": "tsc --noEmit",
@@ -12,7 +30,8 @@
     "test:integration": "node --experimental-strip-types --test tests/integration/*.test.ts"
   },
   "dependencies": {
-    "ajv": "^8.17.1"
+    "ajv": "^8.17.1",
+    "tsx": "^4.23.15"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
