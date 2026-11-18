@@ -186,7 +186,8 @@ async function refresh() {
       button.addEventListener('click', () => selectRun(entry.runId));
       li.append(button); list.append(li);
     }
-    if (focusedRun !== undefined) (focusTarget || $('refresh')).focus();
+    // Restoring focus after a re-render must not scroll: the reader may be looking at another part of the page.
+    if (focusedRun !== undefined) (focusTarget || $('refresh')).focus({ preventScroll: true });
     if (currentGeneration === generation && selected) {
       showDetails(runs.find(item => item.runId === selected) || { runId: selected, available: false });
     }
@@ -203,7 +204,7 @@ function showDetails(entry) {
   const restoreDisclosureFocus = () => {
     if (focusedKey === undefined) return;
     const target = Array.from(details.querySelectorAll('details')).find(item => item.dataset.key === focusedKey);
-    (target?.firstElementChild || $('refresh')).focus();
+    (target?.firstElementChild || $('refresh')).focus({ preventScroll: true });
   };
   details.replaceChildren();
   $('detail-heading').textContent = entry.available && entry.run?.label || entry.runId;
