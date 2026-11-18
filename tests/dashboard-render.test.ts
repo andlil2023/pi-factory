@@ -7,7 +7,8 @@ class Element {
   static active: Element | null = null;
   children: Element[] = [];
   get firstElementChild() { return this.children[0] || null; }
-  focus() { Element.active = this; }
+  static focusOptions: unknown;
+  focus(options?: unknown) { Element.active = this; Element.focusOptions = options; }
   dataset: Record<string, string> = {};
   style: Record<string, string> = {};
   attributes: Record<string, string> = {};
@@ -292,6 +293,7 @@ test('run details prioritize actionable cards, preserve expanded history and saf
   context.showDetails(entry);
   assert.notEqual(Element.active, summary);
   assert.equal(Element.active, details.querySelectorAll('details')[0].firstElementChild, 'focus follows the matching disclosure');
+  assert.deepEqual({ ...(Element.focusOptions as object) }, { preventScroll: true }, 'restoring focus must not scroll the page');
   assert.equal(details.querySelectorAll('details')[0].open, true);
   context.showDetails({ ...entry, run: { ...entry.run, tasks: [] } });
   assert.equal(Element.active, elements.refresh, 'removed disclosure falls back to refresh');
