@@ -1,4 +1,4 @@
-import type { AttemptRecord } from './state-store.ts';
+import type { AttemptRecord, FactoryRunState } from './state-store.ts';
 
 export interface FeedbackFinding {
   reviewer: string;
@@ -121,6 +121,24 @@ export function buildFinalFailureFeedback(verification: unknown): AttemptFeedbac
   const feedback = buildAttemptFeedback([{ number: 0, startedAt: '', outcome: 'implemented', verification }])!;
   return { ...feedback, open: { ...feedback.open, reason: 'Final verification of the completed run failed' }, history: [],
     notes: ['Every planned task was accepted, but the full trusted verification failed on their combined result. This task repairs that failure; the failed checks are listed under open.'] };
+}
+
+/** Feedback for an integration repair, resolved from the persisted rejected candidate. */
+export function buildIntegrationFailureFeedback(state: FactoryRunState, taskId: string, previous: AttemptRecord[] = state.tasks[taskId]?.attempts ?? []): AttemptFeedback {
+  const repair = state.integrationRepairs?.find(entry => entry.taskId === taskId);
+  const integration = state.integrations?.find(entry => entry.number === repair?.integrationAttempt);
+  if (!repair || !integration) throw new Error(`Missing integration attempt for repair ${taskId}`);
+  const rejected = buildAttemptFeedback([{
+    number: integration.number, startedAt: integration.approvedAt, outcome: 'implemented',
+    verification: integration.verification, uiEvidence: integration.uiEvidence,
+    reviews: integration.reviews?.filter(review => review.verdict === 'changes_requested')
+  }])!;
+  const origin = `Integration attempt ${integration.number} rejected the merged result of the target branch and run branch; this feedback describes that merged result, not just the run branch.`;
+  const own = buildAttemptFeedback(previous);
+  const hasOwnItems = own && (own.open.failedChecks.length || own.open.findings.length || own.open.uiEvidenceIssues.length);
+  if (hasOwnItems) return { ...own, notes: [origin, ...own.notes] };
+  return { ...rejected, open: { ...rejected.open, reason: 'Integration candidate rejected' },
+    history: own?.history ?? [], notes: [origin, ...(own?.notes ?? [])] };
 }
 
 /** An attempt that says something about the work, as opposed to a failed agent process. */
