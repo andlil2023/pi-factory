@@ -116,6 +116,13 @@ function summary(attempt: AttemptRecord): string {
   return [reason(attempt), verification === undefined ? undefined : `verification ${verification ? 'passed' : 'failed'}`, reviews || undefined].filter(Boolean).join('; ');
 }
 
+/** Feedback for the first attempt of a task that repairs a failed final verification. */
+export function buildFinalFailureFeedback(verification: unknown): AttemptFeedback {
+  const feedback = buildAttemptFeedback([{ number: 0, startedAt: '', outcome: 'implemented', verification }])!;
+  return { ...feedback, open: { ...feedback.open, reason: 'Final verification of the completed run failed' }, history: [],
+    notes: ['Every planned task was accepted, but the full trusted verification failed on their combined result. This task repairs that failure; the failed checks are listed under open.'] };
+}
+
 /** An attempt that says something about the work, as opposed to a failed agent process. */
 const substantive = (attempt: AttemptRecord): boolean => attempt.outcome === 'blocked' || attempt.outcome === 'failed' || attempt.outcome === 'interrupted'
   || attempt.verification !== undefined || !!attempt.reviews?.length || attempt.uiEvidence !== undefined;
@@ -133,6 +140,7 @@ export function buildAttemptFeedback(previous: AttemptRecord[]): AttemptFeedback
   const reported = latest.outcome !== 'implemented';
   const notes = previous.flatMap(attempt => [
     ...(attempt.infraRetry ? [`Attempt ${attempt.number}: ${attempt.infraRetry.role} process failed (${attempt.infraRetry.error}). Inspect the worktree and continue any remaining edits; keep work tightly scoped to the task.`] : []),
+    ...(attempt.infraRetry?.role === 'implementer' && /timed out/i.test(attempt.infraRetry.error) ? [`Attempt ${attempt.number} was terminated at the session time limit. Finish the remaining edits first, run only focused tests, and do not run a full test suite: the factory runs it after your session.`] : []),
     ...(attempt.outcome === 'interrupted' ? [`Attempt ${attempt.number} was interrupted. Inspect the worktree; edits may be partial.`] : [])
   ]);
   return {

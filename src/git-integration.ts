@@ -25,6 +25,8 @@ export interface IntegrationOptions {
   adapters(worktree: string, baseline: string, attempt: number): OrchestratorAdapters;
   /** Trusted, configured preparation of a fresh integration worktree (for example dependency install). Throws on failure. */
   setup?(worktree: string): Promise<void>;
+  /** Accept an earlier passing full verification of the identical Git tree instead of rerunning the commands. */
+  reuseVerification?: boolean;
   /** Dependency injection for independently tested GitHub transport. */
   github?: Pick<typeof github, 'githubDestination' | 'remoteHead' | 'pushCandidate' | 'createPullRequest' | 'verifyPullRequest'>;
 }
@@ -133,12 +135,21 @@ export async function prepareIntegration(store: StateStore, state: FactoryRunSta
     await assertCandidate(state, record);
     const adapters = options.adapters(record.worktree, record.targetHead, number);
     const context = contextFor(state, record, options, store);
+    // Identity of content, not of commits: the merge commit is always new, but when the target added nothing
+    // its tree is exactly the tree that final verification already passed with every trusted command.
+    const tree = await git(record.worktree, ['rev-parse', 'HEAD^{tree}']);
+    const final = state.finalVerification;
+    const reused = options.reuseVerification === true && final?.passed === true && typeof final.tree === 'string' && final.tree === tree;
     await setPhase(store, state, record, 'setup');
-    if (options.setup) await options.setup(record.worktree);
+    // Setup exists for verification and UI evidence collection; neither runs for a reused result without a collector.
+    if (options.setup && (!reused || adapters.collectUiEvidence)) await options.setup(record.worktree);
     await setPhase(store, state, record, 'verifying');
-    record.verification = await adapters.verify(context);
+    record.verification = reused
+      ? { passed: true, details: { mode: 'full', reused: { from: 'final verification', tree, checkedAt: final!.checkedAt } } }
+      : await adapters.verify(context);
     await store.save(state);
     if (!record.verification.passed) throw new Error('Integration verification failed');
+    record.verifiedTree = tree;
     await assertCandidate(state, record);
     await setPhase(store, state, record, 'selecting_reviewers');
     const selection = adapters.selectReviewers ? await adapters.selectReviewers(context) : { requiredReviewers: [...options.enabledReviewers], changedFiles: [], reasons: ['Static integration review requirements'] };
@@ -198,7 +209,11 @@ async function publicationPreflight(store: StateStore, state: FactoryRunState, o
     const adapters = options.adapters(record.worktree, record.targetHead, record.number);
     delete record.verificationProgress;
     await setPhase(store, state, record, 'publication_verifying');
-    record.publicationVerification = await adapters.verify(contextFor(state, record, options, store));
+    // assertCandidate proved a clean worktree at the prepared commit; the same tree was verified at preparation.
+    const tree = await git(record.worktree, ['rev-parse', 'HEAD^{tree}']);
+    record.publicationVerification = options.reuseVerification === true && record.verifiedTree === tree
+      ? { passed: true, details: { mode: 'full', reused: { from: 'integration verification', tree } } }
+      : await adapters.verify(contextFor(state, record, options, store));
     await store.save(state);
     if (!record.publicationVerification.passed) throw new Error('Pre-publication verification failed');
     if (required.includes('ui') && adapters.collectUiEvidence) {

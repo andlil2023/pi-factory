@@ -3,7 +3,7 @@ import { AgentExecutionError } from './agent-error.ts';
 import { appendReviewResult, reconcileReviewResults } from './review-results.ts';
 import type { ReviewSelection } from './review-routing.ts';
 import type { UiEvidenceRecord } from './ui-evidence.ts';
-import { buildAttemptFeedback, type AttemptFeedback } from './attempt-feedback.ts';
+import { buildAttemptFeedback, buildFinalFailureFeedback, type AttemptFeedback } from './attempt-feedback.ts';
 import { consumedAttempts, consumedInfraRetries, type FactoryRunState, type StateStore, type AttemptRecord, type ReviewVerdict, type VerificationProgress } from './state-store.ts';
 
 export interface PlannedTask {
@@ -36,6 +36,8 @@ export type ReviewProgress = (review: ReviewResult) => Promise<void>;
 export interface VerificationResult {
   passed: boolean;
   details: unknown;
+  /** Git tree that was verified, when the caller can name it. Lets a later gate recognize identical content. */
+  tree?: string;
 }
 export interface TaskContext {
   task: PlannedTask;
@@ -58,6 +60,8 @@ export interface TaskContext {
   onVerificationProgress?(progress: VerificationProgress): Promise<void>;
   requiredReviewers?: string[];
   uiEvidence?: UiEvidenceRecord;
+  /** Run every trusted verification command, ignoring task-level selection. */
+  fullVerification?: boolean;
 }
 export interface OrchestratorAdapters {
   implement(context: TaskContext): Promise<ImplementationResult>;
@@ -72,6 +76,23 @@ export interface OrchestratorOptions {
   maxAttempts?: number;
   requiredReviewers?: string[];
   events?: FactoryEventBus;
+  /** Repair tasks the orchestrator may add after a failed final verification. Default 0: block. */
+  maxFinalRepairs?: number;
+}
+
+/** A task that repairs a failed final verification. It is verified with every trusted command and reviewed like any other task. */
+function finalRepairTask(state: FactoryRunState, tasks: PlannedTask[]): PlannedTask {
+  const numbers = [...tasks.map(task => task.id), ...Object.keys(state.tasks), ...(state.supersededTasks ?? []).map(entry => entry.task.id)]
+    .map(id => Number(/^T(\d+)$/.exec(id)?.[1])).filter(Number.isSafeInteger);
+  return {
+    id: `T${String(Math.max(0, ...numbers) + 1).padStart(3, '0')}`,
+    title: 'Repair final verification failure',
+    objective: 'Make the trusted full verification of the completed run pass.',
+    scope: 'Fix the cause of the failed checks listed in the feedback. Do not delete, skip or weaken tests, and do not change behavior that earlier tasks were accepted for.',
+    acceptanceCriteria: ['Every trusted verification command passes on the combined result of the run', 'No test is deleted, skipped or weakened to make verification pass'],
+    dependencies: tasks.map(task => task.id),
+    verification: ['Rerun the failing tests named in the feedback']
+  };
 }
 
 /** Sequential, deterministic orchestration. Agent calls and verification are injected adapters. */
@@ -107,6 +128,22 @@ export class Orchestrator {
             const final = await this.adapters.finalVerify();
             state.finalVerification = { ...final, checkedAt: new Date().toISOString() };
             this.options.events?.emit({type: final.passed ? 'FINAL_VERIFICATION_PASSED' : 'FINAL_VERIFICATION_FAILED'});
+            const repairs = state.finalRepairs ?? [];
+            if (!final.passed && repairs.length < (this.options.maxFinalRepairs ?? 0)) {
+              // The combined result failed although every task was accepted: give it the same repair path as a task failure.
+              const now = new Date().toISOString();
+              const task = finalRepairTask(state, tasks);
+              state.planRevisions = [...(state.planRevisions ?? []), { replacedAt: now, plan: structuredClone(state.plan) }];
+              const planned = (state.plan as { tasks?: unknown } | null)?.tasks;
+              if (Array.isArray(planned) && planned !== tasks) planned.push(structuredClone(task));
+              tasks.push(task);
+              ids.add(task.id);
+              state.tasks[task.id] = { id: task.id, status: 'pending', attempts: [] };
+              state.finalRepairs = [...repairs, { at: now, taskId: task.id, verification: structuredClone(final) }];
+              this.options.events?.emit({type:'PLAN_REVISED',taskId:task.id,message:`Final verification failed; added repair task ${task.id} (${repairs.length + 1} of ${this.options.maxFinalRepairs})`});
+              await this.store.save(state);
+              continue;
+            }
             if (!final.passed) {
               state.status = 'blocked';
               this.options.events?.emit({type:'RUN_BLOCKED', message:'Final verification failed'});
@@ -144,6 +181,12 @@ export class Orchestrator {
         const context: TaskContext = { task: ready, plan: structuredClone(state.plan), attempt: attempt.number, previousFeedback: feedback, ...(operatorGuidance.length ? { operatorGuidance } : {}) };
         const structured = buildAttemptFeedback(taskState.attempts.slice(0, -1));
         if (structured) context.feedback = structured;
+        const finalRepair = state.finalRepairs?.find(repair => repair.taskId === ready.id);
+        if (finalRepair) {
+          context.fullVerification = true;
+          // Until the repair has attempts of its own, its feedback is the failed final verification.
+          context.feedback ??= buildFinalFailureFeedback(finalRepair.verification);
+        }
         context.onVerificationProgress = async progress => {
           attempt.verificationProgress = progress;
           await this.store.save(state);

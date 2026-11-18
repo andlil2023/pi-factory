@@ -73,6 +73,8 @@ export interface IntegrationAttempt {
   conflicts?: string[];
   error?: string;
   verification?: { passed: boolean; details: unknown };
+  /** Git tree of the candidate that `verification` covers. */
+  verifiedTree?: string;
   publicationVerification?: { passed: boolean; details: unknown };
   reviewSelection?: ReviewSelection;
   reviews?: AttemptRecord['reviews'];
@@ -102,7 +104,9 @@ export interface FactoryRunState {
   /** Plan revisions the factory applied without an operator; bounded by execution.maxAutoReplans. */
   autoReplans?: Array<{ at: string; taskId: string; reason: 'task_too_large' | 'budget_exhausted'; superseded: string[]; added: string[]; leftoverPatch?: string }>;
   finalVerificationProgress?: VerificationProgress;
-  finalVerification?: { passed: boolean; details: unknown; checkedAt: string; head?: string };
+  finalVerification?: { passed: boolean; details: unknown; checkedAt: string; head?: string; tree?: string };
+  /** Repair tasks added after a failed final verification; bounded by execution.maxFinalRepairs. */
+  finalRepairs?: Array<{ at: string; taskId: string; verification: { passed: boolean; details: unknown } }>;
   tasks: Record<string, TaskState>;
 }
 

@@ -16,7 +16,7 @@ import type { ReviewRouting } from './review-routing.ts';
 import { validateUiEvidenceCommand, type UiEvidenceCommand } from './ui-evidence.ts';
 import { acquireRunLock } from './run-lock.ts';
 import { prepareIntegration, publishIntegration, publishPullRequest, hasGitRemote, type IntegrationOptions } from './git-integration.ts';
-import { captureRunGitState, configurationFingerprint, prepareRunResume, validateRunGitState, assertRunCheckpoint, MAX_GUIDANCE_LENGTH } from './run-recovery.ts';
+import { captureRunGitState, configurationFingerprint, fingerprintForRun, prepareRunResume, validateRunGitState, assertRunCheckpoint, MAX_GUIDANCE_LENGTH } from './run-recovery.ts';
 import { amendRunPlan } from './plan-amendment.ts';
 import { reviewedPlan, planningContext, type PlanReviewReport, type ReviewedPlan } from './plan-review.ts';
 import { autoReplanCandidate, assertReplacementPlan, saveLeftoverPatch, resetRunWorktree, type AutoReplanReason } from './auto-replan.ts';
@@ -34,8 +34,10 @@ interface Config {
   reviewers?: SpecialistReviewers;
   reviewRouting?: ReviewRouting;
   uiEvidence?: { command: UiEvidenceCommand };
-  /** `maxAutoReplans`: plan revisions the factory may apply without an operator per run; 0 always stops. Default 2. */
-  execution?: { maxAttempts?: number; maxInfraRetries?: number; verificationReruns?: number; maxAutoReplans?: number };
+  /** `maxAutoReplans`: plan revisions the factory may apply without an operator per run; 0 always stops. Default 2.
+   * `maxFinalRepairs`: repair tasks added after a failed final verification; 0 blocks at once. Default 2.
+   * `reuseVerification`: accept an earlier passing full verification of the identical Git tree instead of rerunning it. Default true. */
+  execution?: { maxAttempts?: number; maxInfraRetries?: number; verificationReruns?: number; maxAutoReplans?: number; maxFinalRepairs?: number; reuseVerification?: boolean };
   verification?: Array<{ executable: string; args?: string[]; timeoutMs?: number }>;
   verificationSelection?: SelectionConfig;
   /** Trusted commands that prepare every fresh run or integration worktree, for example a dependency install. */
@@ -97,6 +99,9 @@ async function configFrom(flags:Record<string,string|boolean>):Promise<Config> {
   if (!Number.isSafeInteger(verificationReruns) || verificationReruns < 0 || verificationReruns > 3) throw new Error('Invalid execution.verificationReruns; use 0-3');
   const maxAutoReplans = config.execution?.maxAutoReplans ?? 2;
   if (!Number.isSafeInteger(maxAutoReplans) || maxAutoReplans < 0 || maxAutoReplans > 10) throw new Error('Invalid execution.maxAutoReplans; use 0-10');
+  const maxFinalRepairs = config.execution?.maxFinalRepairs ?? 2;
+  if (!Number.isSafeInteger(maxFinalRepairs) || maxFinalRepairs < 0 || maxFinalRepairs > 5) throw new Error('Invalid execution.maxFinalRepairs; use 0-5');
+  if (config.execution?.reuseVerification !== undefined && typeof config.execution.reuseVerification !== 'boolean') throw new Error('Invalid execution.reuseVerification; use true or false');
   const maxReviewRounds = config.planning?.maxReviewRounds ?? 2;
   if (!Number.isSafeInteger(maxReviewRounds) || maxReviewRounds < 0 || maxReviewRounds > 5) throw new Error('Invalid planning.maxReviewRounds; use 0-5');
   const planReviewer = config.agents.planReviewer;
@@ -246,7 +251,12 @@ async function runVerificationCommand(cwd: string, command: {executable:string;a
   });
 }
 
-type FinalCheck = {command:string;passed:boolean;stdout:string;stderr:string;flaky?:true;firstFailure?:{stdout:string;stderr:string}};
+async function gitTree(worktree:string):Promise<string> {
+  const outcome=await runVerificationCommand(worktree,{executable:'git',args:['rev-parse','HEAD^{tree}'],timeoutMs:60000});
+  const tree=outcome.stdout.trim();
+  if (!outcome.passed || !/^[a-f0-9]{40,64}$/.test(tree)) throw new Error('Unable to read the Git tree of the run worktree');
+  return tree;
+}
 
 /** A fresh worktree has no ignored files such as node_modules; nothing else installs them before deterministic verification. */
 async function runSetup(worktree:string,config:Config):Promise<void> {
@@ -298,7 +308,7 @@ async function resumeCommand(flags:Record<string,string|boolean>):Promise<void> 
     const ids=plan.value.tasks.map(task=>task.id);
     if (ids.length!==Object.keys(loaded.tasks).length || ids.some(id=>!loaded.tasks[id])) throw new Error('Task plan/state mismatch');
     const retryTask=flags['retry-task']===undefined ? undefined : required(flags,'retry-task');
-    const state=await prepareRunResume(store,loaded,repository,configurationFingerprint(config),config.execution?.maxAttempts??3,retryTask,await guidanceFrom(flags),config.execution?.maxInfraRetries ?? (loaded.execution?.maxInfraRetries === undefined ? 0 : 1));
+    const state=await prepareRunResume(store,loaded,repository,fingerprintForRun(config,loaded.execution?.configurationFingerprint),config.execution?.maxAttempts??3,retryTask,await guidanceFrom(flags),config.execution?.maxInfraRetries ?? (loaded.execution?.maxInfraRetries === undefined ? 0 : 1));
     await executeRun(store,state,config);
   } finally { await release(); }
 }
@@ -440,29 +450,25 @@ async function executeRun(store:StateStore,state:FactoryRunState,config:Config):
       return { commit: checkpoint.commit };
     },
     finalVerify: async () => {
-      // Run the same trusted commands against the final committed worktree.
+      // Every trusted command against the final committed worktree, whatever the tasks selected.
       await assertRunCheckpoint(state);
-      const details: FinalCheck[] = [];
-      state.finalVerificationProgress = {mode:'full',completed:0,total:config.verification!.length,failed:0};
-      await store.save(state);
-      for (const command of config.verification ?? []) {
-        let outcome: FinalCheck = await runVerificationCommand(worktree.path, command);
-        // Same rule as task verification: a rerun that passes is accepted and recorded as flaky.
-        for (let rerun = 1; !outcome.passed && rerun <= (config.execution?.verificationReruns ?? 1); rerun++) {
-          const again = await runVerificationCommand(worktree.path, command);
-          if (again.passed) outcome = {...again, flaky:true, firstFailure:{stdout:outcome.stdout.slice(-8000),stderr:outcome.stderr.slice(-8000)}};
-          else outcome = again;
-        }
-        details.push(outcome);
-        state.finalVerificationProgress = {mode:'full',completed:details.length,total:config.verification!.length,failed:details.filter(check=>!check.passed).length};
-        await store.save(state);
+      const tree = await gitTree(worktree.path);
+      // The last checkpoint commits exactly the tree its task verification ran on. If that verification
+      // already ran every trusted command and passed, running them again on the same tree proves nothing new.
+      const accepted = Object.values(state.tasks).flatMap(task => task.attempts.map(attempt => ({task, attempt}))).find(entry => entry.attempt.checkpointCommit === git.expectedHead);
+      const prior = accepted?.attempt.verification as {passed?:unknown;details?:{mode?:unknown}}|undefined;
+      if (config.execution?.reuseVerification !== false && accepted && prior?.passed === true && prior.details?.mode === 'full') {
+        return {passed:true,details:{mode:'full',reused:{from:'task verification',taskId:accepted.task.id,attempt:accepted.attempt.number,checkpoint:git.expectedHead}},tree};
       }
+      const result = await adapters.verify({task:{id:'FINAL',title:'Final verification',objective:'',scope:'',acceptanceCriteria:[],dependencies:[],verification:[]},
+        attempt:(state.finalRepairs?.length??0)+1,previousFeedback:[],fullVerification:true,
+        onVerificationProgress:async progress => { state.finalVerificationProgress = progress; await store.save(state); }});
       await assertRunCheckpoint(state);
-      return {passed:details.every(outcome => outcome.passed),details};
+      return {...result,tree};
     }
   };
   const events=new FactoryEventBus({runId,logFile:join(repository,'.factory','runs',`${runId}.events.jsonl`)});
-  const orchestrator=new Orchestrator(store,integratedAdapters,{maxAttempts:config.execution?.maxAttempts??3,requiredReviewers:requiredReviewerIds(config.reviewers),events});
+  const orchestrator=new Orchestrator(store,integratedAdapters,{maxAttempts:config.execution?.maxAttempts??3,requiredReviewers:requiredReviewerIds(config.reviewers),events,maxFinalRepairs:config.execution?.maxFinalRepairs??2});
   let finished;
   try {
     finished=await orchestrator.execute(state,(state.plan as Plan).tasks);
@@ -508,7 +514,8 @@ async function integrateCommand(flags:Record<string,string|boolean>):Promise<voi
       const launch=piLaunch(config);
       const options:IntegrationOptions={
         guidance: integrationGuidance,
-        configurationFingerprint:configurationFingerprint(config), enabledReviewers:requiredReviewerIds(config.reviewers),
+        configurationFingerprint:fingerprintForRun(config,state.execution?.configurationFingerprint), enabledReviewers:requiredReviewerIds(config.reviewers),
+        reuseVerification:config.execution?.reuseVerification!==false,
         task:{id:'T000',title:'Verify cumulative run integration',objective:plan.value.objective,
           scope:plan.value.tasks.map(task=>`${task.id}: ${task.scope}`).join('\n'),
           acceptanceCriteria:plan.value.tasks.flatMap(task=>task.acceptanceCriteria.map(criterion=>`${task.id}: ${criterion}`)),

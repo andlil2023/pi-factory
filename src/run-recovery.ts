@@ -12,13 +12,24 @@ async function git(cwd: string, args: string[]): Promise<string> {
   return stdout.trim();
 }
 
-export function configurationFingerprint(config: unknown): string {
+/**
+ * Identifies the configuration a run was started with. Time limits (`timeoutMs`) are excluded:
+ * they bound how long a step may take, not what it does, so an operator may change them between resumes.
+ * `includeTimeouts` reproduces the fingerprint of runs started before that exclusion.
+ */
+export function configurationFingerprint(config: unknown, includeTimeouts = false): string {
   const normalize = (value: unknown): unknown => {
     if (Array.isArray(value)) return value.map(normalize);
-    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, child]) => [key, normalize(child)]));
+    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).filter(([key]) => includeTimeouts || key !== 'timeoutMs').sort(([a], [b]) => a.localeCompare(b)).map(([key, child]) => [key, normalize(child)]));
     return value;
   };
   return createHash('sha256').update(JSON.stringify(normalize(config))).digest('hex');
+}
+
+/** The fingerprint to compare with a persisted run: the older, timeout-sensitive form when that is what the run recorded. */
+export function fingerprintForRun(config: unknown, recorded: string | undefined): string {
+  const legacy = configurationFingerprint(config, true);
+  return recorded === legacy ? legacy : configurationFingerprint(config);
 }
 
 export async function captureRunGitState(info: WorktreeInfo): Promise<GitExecutionState> {
