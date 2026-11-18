@@ -14,6 +14,9 @@ export interface VerificationProgress {
   completed: number;
   total: number;
   failed: number;
+  status?: 'running' | 'passed' | 'failed' | 'interrupted';
+  currentCheck?: number;
+  checks?: Array<{ ordinal: number; passed: boolean }>;
 }
 
 export interface AttemptRecord {
@@ -56,8 +59,9 @@ export interface ExecutionPolicy {
 }
 
 export interface IntegrationAttempt {
-  phase?: 'creating_worktree' | 'merging' | 'setup' | 'verifying' | 'selecting_reviewers' | 'collecting_ui_evidence' | 'reviewing' | 'checking_candidate' | 'awaiting_publication' | 'publication_verifying' | 'publishing' | 'published' | 'pr_opened' | 'stopped';
+  phase?: 'creating_worktree' | 'merging' | 'setup' | 'verifying' | 'selecting_reviewers' | 'collecting_ui_evidence' | 'reviewing' | 'checking_candidate' | 'awaiting_publication' | 'publication_checking' | 'publication_verifying' | 'publishing' | 'published' | 'pr_opened' | 'stopped';
   phaseUpdatedAt?: string;
+  failedPhase?: IntegrationAttempt['phase'];
   verificationProgress?: VerificationProgress;
   /** Operator text approved at preparation; retained for later attempts, never automatic proof. */
   guidance?: string;
@@ -103,7 +107,7 @@ export interface FactoryRunState {
   supersededTasks?: Array<{ supersededAt: string; task: TaskState }>;
   /** Plan revisions the factory applied without an operator; bounded by execution.maxAutoReplans. */
   autoReplans?: Array<{ at: string; taskId: string; reason: 'task_too_large' | 'budget_exhausted'; superseded: string[]; added: string[]; leftoverPatch?: string }>;
-  finalVerificationProgress?: VerificationProgress;
+  finalVerificationProgress?: VerificationProgress & { startedAt?: string };
   finalVerification?: { passed: boolean; details: unknown; checkedAt: string; head?: string };
   /** Repair tasks added after a failed final verification; bounded by execution.maxFinalRepairs. */
   finalRepairs?: Array<{ at: string; taskId: string; verification: { passed: boolean; details: unknown }; /** The failure did not reproduce and nothing was changed: the task was removed again. */ withdrawn?: boolean }>;
@@ -210,6 +214,11 @@ export class StateStore {
       }
       task.status = 'blocked';
       task.lastError = 'Execution interrupted; inspect working tree before resuming';
+      changed = true;
+    }
+    if (state.finalVerificationProgress?.status === 'running') {
+      state.finalVerificationProgress.status = 'interrupted';
+      delete state.finalVerificationProgress.currentCheck;
       changed = true;
     }
     if (changed) {

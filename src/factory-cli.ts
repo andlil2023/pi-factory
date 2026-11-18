@@ -442,7 +442,7 @@ async function executeRun(store:StateStore,state:FactoryRunState,config:Config):
       git.expectedHead = checkpoint.commit;
       return { commit: checkpoint.commit };
     },
-    finalVerify: async () => {
+    finalVerify: async (onProgress: NonNullable<TaskContext['onVerificationProgress']>) => {
       // Every trusted command against the final committed worktree, whatever the tasks selected.
       await assertRunCheckpoint(state);
       // The last checkpoint commits exactly the tree its task verification ran on, in this same worktree. If that
@@ -454,8 +454,8 @@ async function executeRun(store:StateStore,state:FactoryRunState,config:Config):
         return {passed:true,details:{mode:'full',reused:{from:'task verification',taskId:accepted.task.id,attempt:accepted.attempt.number,checkpoint:git.expectedHead}}};
       }
       const result = await adapters.verify({task:{id:'FINAL',title:'Final verification',objective:'',scope:'',acceptanceCriteria:[],dependencies:[],verification:[]},
-        attempt:(state.finalRepairs?.length??0)+1,previousFeedback:[],fullVerification:true,
-        onVerificationProgress:async progress => { state.finalVerificationProgress = progress; await store.save(state); }});
+        attempt:(state.finalRepairs?.length??0)+1,previousFeedback:[],fullVerification:true,finalVerificationProgress:true,
+        onVerificationProgress:onProgress});
       await assertRunCheckpoint(state);
       return result;
     },

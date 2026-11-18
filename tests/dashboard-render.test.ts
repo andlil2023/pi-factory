@@ -72,6 +72,122 @@ test('descriptive names, IDs and intended work render as text with narrow-layout
   assert.match(css, /@media\s*\(max-width:\s*640px\)/);
 });
 
+test('attempt timing updates live and keeps retry durations separate without inventing timestamps', async () => {
+  const elements = Object.fromEntries(['runs', 'list-status', 'refresh', 'details', 'detail-heading', 'detail-status', 'timeline', 'connection'].map(id => [id, new Element(id)]));
+  let now = Date.parse('2025-01-01T00:02:00Z');
+  class Clock extends Date { static now() { return now; } }
+  let tick: () => Promise<void> = async () => {};
+  const context = {
+    document: { getElementById: (id: string) => elements[id], createElement: (tag: string) => new Element(tag), activeElement: null },
+    fetch: async () => { throw new Error('offline'); }, Date: Clock,
+    setInterval(fn: () => Promise<void>) { tick = fn; }, showDetails: (_entry: unknown) => {}
+  };
+  runInNewContext(await readFile(new URL('../src/dashboard/dashboard.js', import.meta.url), 'utf8'), context);
+  await new Promise(resolve => setImmediate(resolve));
+  const entry = { runId: 'run', available: true, run: { status: 'running', createdAt: 'a', updatedAt: 'b', tasks: [
+    { id: 'retry', status: 'running', attempts: [
+      { number: 1, startedAt: '2025-01-01T00:00:00Z', finishedAt: '2025-01-01T00:00:45Z' },
+      { number: 2, startedAt: '2025-01-01T00:01:30Z' }
+    ] },
+    { id: 'invalid', status: 'running', attempts: [{ number: 1, startedAt: 'bad' }] },
+    { id: 'missing', status: 'completed', attempts: [{ number: 1, finishedAt: '2025-01-01T00:01:00Z' }] },
+    { id: 'bad-end', status: 'completed', attempts: [{ number: 1, startedAt: '2025-01-01T00:01:00Z', finishedAt: 'bad' }] },
+    { id: 'backwards', status: 'completed', attempts: [{ number: 1, startedAt: '2025-01-01T00:01:00Z', finishedAt: '2025-01-01T00:00:00Z' }] }
+  ] } };
+  context.showDetails(entry);
+  assert.match(text(elements.details), /Attempt 1 duration: 0h 0m 45s/);
+  assert.match(text(elements.details), /Attempt 2 elapsed: 0h 0m 30s/);
+  assert.equal((text(elements.details).match(/Attempt 1 timing unavailable/g) || []).length, 8);
+  now += 5000;
+  await tick();
+  assert.match(text(elements.details), /Attempt 2 elapsed: 0h 0m 35s/);
+  assert.match(text(elements.details), /Attempt 1 duration: 0h 0m 45s/);
+  context.showDetails({ ...entry, run: { ...entry.run, tasks: [{ id: 'retry', status: 'completed', attempts: [
+    { number: 2, startedAt: '2025-01-01T00:01:30Z', finishedAt: '2025-01-01T00:02:05Z' }
+  ] }] } });
+  assert.match(text(elements.details), /Attempt 2 duration: 0h 0m 35s/);
+  now += 5000;
+  await tick();
+  assert.match(text(elements.details), /Attempt 2 duration: 0h 0m 35s/);
+  assert.doesNotMatch(text(elements.details), /elapsed/);
+});
+
+test('verification progress uses only positive known totals in all contexts', async () => {
+  const elements = Object.fromEntries(['runs', 'list-status', 'refresh', 'details', 'detail-heading', 'detail-status', 'timeline', 'connection'].map(id => [id, new Element(id)]));
+  let now = Date.parse('2025-01-01T00:02:00Z');
+  class Clock extends Date { static now() { return now; } }
+  let tick: () => Promise<void> = async () => {};
+  const context = {
+    document: { getElementById: (id: string) => elements[id], createElement: (tag: string) => new Element(tag), activeElement: null },
+    fetch: async () => ({ ok: true, json: async () => [] }), Date: Clock,
+    setInterval(fn: () => Promise<void>) { tick = fn; }, showDetails: (_entry: unknown) => {}
+  };
+  runInNewContext(await readFile(new URL('../src/dashboard/dashboard.js', import.meta.url), 'utf8'), context);
+  await new Promise(resolve => setImmediate(resolve));
+  const makeRun = (total: number | undefined) => ({ status: 'running', createdAt: 'a', updatedAt: 'b',
+    finalVerificationProgress: { status: 'running', mode: 'full', completed: 1, total, failed: 0, startedAt: '2025-01-01T00:01:50Z' },
+    tasks: [{ id: 'task', status: 'running', attempts: [{ number: 1, phase: 'verifying', startedAt: '2025-01-01T00:01:30Z', verificationProgress: { mode: 'selected', completed: 1, total, failed: 0 } }] }],
+    integrations: [{ number: 1, status: 'running', phase: 'verifying', phaseUpdatedAt: '2025-01-01T00:01:00Z', verificationProgress: { mode: 'full', completed: 1, total, failed: 0 } }]
+  });
+  context.showDetails({ runId: 'run', available: true, run: makeRun(2) });
+  let bars = elements.details.querySelectorAll('div').filter(item => item.attributes.role === 'progressbar');
+  assert.equal(bars.length, 3);
+  assert.doesNotMatch(text(elements.details), /Final verification elapsed/);
+  for (const bar of bars) {
+    assert.equal(bar.attributes['aria-valuenow'], '1');
+    assert.equal(bar.attributes['aria-valuemax'], '2');
+    assert.equal(bar.children[0].style.width, '50%');
+  }
+  for (const total of [0, undefined]) {
+    context.showDetails({ runId: 'run', available: true, run: makeRun(total) });
+    bars = elements.details.querySelectorAll('div').filter(item => item.attributes.role === 'progressbar');
+    assert.equal(bars.length, 0);
+    assert.doesNotMatch(text(elements.details), /% of verification|ETA|1\/0|undefined finished/);
+    assert.match(text(elements.details), /Final verification: running/);
+    assert.match(text(elements.details), /Final verification elapsed: 0h 0m 10s/);
+    assert.match(text(elements.details), /Current phase: verifying/);
+    assert.match(text(elements.details), /Attempt 1 elapsed: 0h 0m 30s/);
+    assert.match(text(elements.details), /Phase: verifying · Phase started 1m ago/);
+  }
+  now += 5000;
+  await tick();
+  assert.match(text(elements.details), /Attempt 1 elapsed: 0h 0m 35s/);
+  assert.match(text(elements.details), /Final verification elapsed: 0h 0m 15s/);
+  const legacy = makeRun(0);
+  context.showDetails({ runId: 'run', available: true, run: { ...legacy, finalVerificationProgress: { ...legacy.finalVerificationProgress, startedAt: undefined } } });
+  assert.doesNotMatch(text(elements.details), /Final verification elapsed/);
+  context.showDetails({ runId: 'run', available: true, run: { ...legacy, finalVerificationProgress: { ...legacy.finalVerificationProgress, startedAt: 'invalid' } } });
+  assert.doesNotMatch(text(elements.details), /Final verification elapsed|NaN|ETA/);
+  assert.equal(elements.details.querySelectorAll('div').filter(item => item.attributes.role === 'progressbar').length, 0);
+});
+
+test('final verification displays refreshed lifecycle and outcomes as text', async () => {
+  const elements = Object.fromEntries(['runs', 'list-status', 'refresh', 'details', 'detail-heading', 'detail-status', 'timeline', 'connection'].map(id => [id, new Element(id)]));
+  const context = {
+    document: { getElementById: (id: string) => elements[id], createElement: (tag: string) => new Element(tag), activeElement: null },
+    fetch: async () => ({ ok: true, json: async () => [] }), setInterval() {}, showDetails: (_entry: unknown) => {}
+  };
+  runInNewContext(await readFile(new URL('../src/dashboard/dashboard.js', import.meta.url), 'utf8'), context);
+  await new Promise(resolve => setImmediate(resolve));
+  const run = { status: 'running', createdAt: 'a', updatedAt: 'b', tasks: [], finalVerificationProgress: {
+    mode: 'full', completed: 1, total: 2, failed: 0, status: 'running', currentCheck: 2, checks: [{ ordinal: 1, passed: true }]
+  } };
+  context.showDetails({ runId: 'run', available: true, run });
+  assert.match(text(elements.details), /Final verification: running/);
+  assert.match(text(elements.details), /Current check: 2/);
+  assert.match(text(elements.details), /Check 1: passed/);
+  context.showDetails({ runId: 'run', available: true, run: { ...run, finalVerificationProgress: { ...run.finalVerificationProgress, status: 'failed', currentCheck: undefined, checks: [{ ordinal: 2, passed: false }] }, finalVerification: { passed: false, checkedAt: '<img src=x>' } } });
+  assert.match(text(elements.details), /Final result: failed/);
+  assert.match(text(elements.details), /Check 2: failed/);
+  assert.doesNotMatch(text(elements.details), /Current check/);
+  assert.match(text(elements.details), /<img src=x>/);
+  assert.equal(elements.details.querySelectorAll('img').length, 0);
+  context.showDetails({ runId: 'run', available: true, run: { ...run, finalVerificationProgress: { ...run.finalVerificationProgress, status: 'interrupted', currentCheck: undefined } } });
+  assert.match(text(elements.details), /Final verification: interrupted/);
+  context.showDetails({ runId: 'run', available: true, run: { ...run, finalVerificationProgress: undefined, finalVerification: { passed: true } } });
+  assert.match(text(elements.details), /Final verification: passed/);
+});
+
 test('revisions and rerun-passed attempts render safely and only when present', async () => {
   const elements = Object.fromEntries(['runs', 'list-status', 'refresh', 'details', 'detail-heading', 'detail-status', 'timeline', 'connection'].map(id => [id, new Element(id)]));
   const context = {
@@ -148,6 +264,16 @@ test('run details prioritize actionable cards, preserve expanded history and saf
   assert.match(text(details), /Phase: verifying/);
   assert.match(text(details), /Verification commands: 1\/3 finished · full suite · 1 failed/);
   assert.match(text(details), /code: pending/);
+  context.showDetails({...entry, run:{...entry.run, integrations:[{number:1,status:'blocked',phase:'stopped',failedPhase:'<img src=x>',uiEvidence:{passed:false},reviews:[]},{number:2,status:'ready',phase:'awaiting_publication',verification:{passed:true},reviews:[{reviewer:'code',verdict:'approved',findings:[]}]}]}});
+  assert.match(text(details), /Failed phase: <img src=x>/);
+  assert.match(text(details), /Waiting for operator publication approval/);
+  assert.match(text(details), /UI evidence: failed/);
+  assert.equal(details.querySelectorAll('img').length, 0);
+  context.showDetails({...entry, run:{...entry.run, integrations:[{number:1,status:'ready',phase:'stopped',failedPhase:'publication_checking',error:'Publication checks failed; inspect the candidate and destination before retrying',reviews:[]}]}});
+  assert.match(text(details), /Failed phase: publication checking/);
+  assert.match(text(details), /Publication checks failed/);
+  assert.doesNotMatch(text(details), /Waiting for operator publication approval/);
+  context.showDetails(entry);
   assert.match(text(details), /Accepted on run branch/);
   context.showDetails({...entry, run:{...entry.run, status:'completed', deliveryStatus:'awaiting_integration'}});
   assert.match(text(details), /Work verified · awaiting integration/);

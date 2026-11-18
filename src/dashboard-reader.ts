@@ -8,7 +8,7 @@ const runIdPattern = /^[a-zA-Z0-9_-]+$/;
 const runStatuses = ['planned', 'running', 'paused', 'completed', 'blocked'];
 const taskStatuses = ['pending', 'running', 'needs_review', 'repair_pending', 'completed', 'blocked'];
 const outcomes = ['implemented', 'failed', 'blocked', 'interrupted', 'error'];
-const eventTypes = new Set(['RUN_STARTED', 'RUN_COMPLETED', 'RUN_BLOCKED', 'TASK_STARTED', 'TASK_COMPLETED', 'TASK_BLOCKED', 'AGENT_STARTED', 'AGENT_COMPLETED', 'AGENT_FAILED', 'VERIFICATION_PASSED', 'VERIFICATION_FAILED', 'REVIEW_APPROVED', 'REVIEW_CHANGES_REQUESTED', 'REVIEW_BLOCKED', 'REPAIR_STARTED', 'CHECKPOINT_CREATED', 'FINAL_VERIFICATION_PASSED', 'FINAL_VERIFICATION_FAILED', 'PLAN_REVISED']);
+const eventTypes = new Set(['RUN_STARTED', 'RUN_COMPLETED', 'RUN_BLOCKED', 'TASK_STARTED', 'TASK_COMPLETED', 'TASK_BLOCKED', 'AGENT_STARTED', 'AGENT_COMPLETED', 'AGENT_FAILED', 'VERIFICATION_STARTED', 'VERIFICATION_PASSED', 'VERIFICATION_FAILED', 'REVIEW_APPROVED', 'REVIEW_CHANGES_REQUESTED', 'REVIEW_BLOCKED', 'REPAIR_STARTED', 'CHECKPOINT_CREATED', 'FINAL_VERIFICATION_PASSED', 'FINAL_VERIFICATION_FAILED', 'PLAN_REVISED']);
 
 function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -38,6 +38,17 @@ function displayString(value: unknown, limit: number): string | undefined {
 function projectProgress(value: unknown) {
   if (!object(value) || !['full', 'selected'].includes(String(value.mode)) || ![value.completed, value.total, value.failed].every(n => Number.isSafeInteger(n) && (n as number) >= 0)) return undefined;
   return { mode: value.mode, completed: value.completed, total: value.total, failed: value.failed };
+}
+function projectFinalProgress(value: unknown) {
+  const progress = projectProgress(value);
+  if (!progress || !object(value)) return undefined;
+  const status = typeof value.status === 'string' && ['running', 'passed', 'failed', 'interrupted'].includes(value.status) ? value.status : undefined;
+  const currentCheck = Number.isSafeInteger(value.currentCheck) && (value.currentCheck as number) > 0 ? value.currentCheck : undefined;
+  const checks = Array.isArray(value.checks) ? value.checks.flatMap((check: unknown) =>
+    object(check) && Number.isSafeInteger(check.ordinal) && (check.ordinal as number) > 0 && typeof check.passed === 'boolean'
+      ? [{ ordinal: check.ordinal, passed: check.passed }] : []) : undefined;
+  const start = typeof value.startedAt === 'string' ? Date.parse(value.startedAt) : NaN;
+  return { ...progress, status, currentCheck, checks, ...(Number.isFinite(start) ? { startedAt: new Date(start).toISOString() } : {}) };
 }
 function projectRevisions(value: unknown) {
   if (!Array.isArray(value)) return [];
@@ -94,16 +105,18 @@ export function projectRun(state: FactoryRunState) {
     autoReplans: projectRevisions(state.autoReplans),
     tasks: Object.values(state.tasks).map(task => projectTask(task, titles.get(task.id))),
     supersededTasks: (state.supersededTasks ?? []).map(entry => ({ supersededAt: entry.supersededAt, task: projectTask(entry.task) })),
-    finalVerificationProgress: projectProgress(state.finalVerificationProgress),
+    finalVerificationProgress: projectFinalProgress(state.finalVerificationProgress),
     finalVerification: state.finalVerification && typeof state.finalVerification.passed === 'boolean' ? { passed: state.finalVerification.passed, checkedAt: typeof state.finalVerification.checkedAt === 'string' ? state.finalVerification.checkedAt : undefined } : undefined,
     integrations: integrations.map(i => ({
       number: Number.isSafeInteger(i.number) ? i.number : undefined, status: typeof i.status === 'string' ? i.status : undefined, error: typeof i.error === 'string' ? i.error : undefined,
       phase: typeof i.phase === 'string' ? i.phase : undefined,
+      failedPhase: typeof i.failedPhase === 'string' && ['creating_worktree', 'merging', 'setup', 'verifying', 'selecting_reviewers', 'collecting_ui_evidence', 'reviewing', 'checking_candidate', 'awaiting_publication', 'publication_checking', 'publication_verifying', 'publishing'].includes(i.failedPhase) ? i.failedPhase : undefined,
       phaseUpdatedAt: typeof i.phaseUpdatedAt === 'string' ? i.phaseUpdatedAt : undefined,
       verificationProgress: projectProgress(i.verificationProgress),
       requiredReviewers: object(i.reviewSelection) && Array.isArray(i.reviewSelection.requiredReviewers) ? i.reviewSelection.requiredReviewers.filter(id => typeof id === 'string') : [],
       verification: object(i.verification) && typeof i.verification.passed === 'boolean' ? { passed: i.verification.passed } : undefined,
       publicationVerification: object(i.publicationVerification) && typeof i.publicationVerification.passed === 'boolean' ? { passed: i.publicationVerification.passed } : undefined,
+      uiEvidence: object(i.uiEvidence) && typeof i.uiEvidence.passed === 'boolean' ? { passed: i.uiEvidence.passed } : undefined,
       reviews: Array.isArray(i.reviews) ? i.reviews.filter(object).map(r => ({ reviewer: typeof r.reviewer === 'string' ? r.reviewer : undefined, verdict: typeof r.verdict === 'string' ? r.verdict : undefined, findings: object(r.report) && Array.isArray(r.report.findings) ? r.report.findings.map((f: unknown) => fields(f, ['severity', 'file', 'line', 'description', 'evidence', 'requiredAction'])) : [] })) : []
     }))
   };

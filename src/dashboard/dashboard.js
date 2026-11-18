@@ -4,6 +4,7 @@ let selected = null;
 let stream = null;
 let generation = 0;
 let loading = false;
+let liveTimings = [];
 
 function node(tag, text, className) {
   const element = document.createElement(tag);
@@ -20,6 +21,28 @@ function age(timestamp) {
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
   return `${Math.floor(seconds / 86400)}d ago`;
 }
+function formatDuration(ms) {
+  const seconds = Math.floor(ms / 1000);
+  return `${Math.floor(seconds / 3600)}h ${Math.floor(seconds % 3600 / 60)}m ${seconds % 60}s`;
+}
+function attemptTiming(attempt, running) {
+  const start = typeof attempt.startedAt === 'string' && attempt.startedAt.trim() ? Date.parse(attempt.startedAt) : NaN;
+  const finished = attempt.finishedAt !== undefined && attempt.finishedAt !== null;
+  const end = finished && typeof attempt.finishedAt === 'string' && attempt.finishedAt.trim() ? Date.parse(attempt.finishedAt) : running && !finished ? Date.now() : NaN;
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return `Attempt ${attempt.number} timing unavailable`;
+  return `Attempt ${attempt.number} ${finished ? 'duration' : 'elapsed'}: ${formatDuration(end - start)}`;
+}
+function timingNode(attempt, running) {
+  const element = node('p', attemptTiming(attempt, running), 'task-meta');
+  if (running && attempt.finishedAt == null) liveTimings.push({ element, attempt });
+  return element;
+}
+function updateLiveTimings() {
+  for (const { element, attempt, update } of liveTimings) {
+    if (update) update();
+    else element.textContent = attemptTiming(attempt, true);
+  }
+}
 function label(value) { return String(value ?? 'unknown').replaceAll('_', ' ').toLowerCase(); }
 function badge(value, text) {
   const element = node('span', text || label(value), 'badge');
@@ -31,7 +54,26 @@ function badge(value, text) {
 }
 function verificationProgress(parent, value) {
   if (!value) return;
-  parent.append(node('p', `Verification commands: ${value.completed}/${value.total} finished · ${value.mode} suite · ${value.failed} failed`, 'task-meta'));
+  const knownTotal = Number.isSafeInteger(value.total) && value.total > 0;
+  const knownCompleted = Number.isSafeInteger(value.completed) && value.completed >= 0;
+  const details = [];
+  if (knownCompleted) details.push(knownTotal ? `${value.completed}/${value.total} finished` : `${value.completed} finished`);
+  if (value.mode) details.push(`${value.mode} suite`);
+  if (Number.isSafeInteger(value.failed) && value.failed >= 0) details.push(`${value.failed} failed`);
+  if (details.length) parent.append(node('p', `Verification commands: ${details.join(' · ')}`, 'task-meta'));
+  if (!knownTotal || !knownCompleted) return;
+  const completed = Math.min(value.completed, value.total);
+  const percent = Math.round(completed / value.total * 100);
+  const progress = node('div', undefined, 'progress');
+  progress.setAttribute('role', 'progressbar');
+  progress.setAttribute('aria-label', 'Verification checks');
+  progress.setAttribute('aria-valuemin', '0');
+  progress.setAttribute('aria-valuemax', String(value.total));
+  progress.setAttribute('aria-valuenow', String(completed));
+  const fill = node('div', undefined, 'progress-fill');
+  fill.style.width = `${percent}%`;
+  progress.append(fill);
+  parent.append(progress, node('p', `${percent}% of verification checks finished`, 'task-meta'));
 }
 function deliveryLabel(run) {
   const status = run.deliveryStatus;
@@ -75,6 +117,8 @@ function renderTask(task, maxAttempts, openKeys, key = task.id) {
   const attempts = task.attempts || [];
   const latest = attempts[attempts.length - 1];
   card.append(node('p', `${task.budgetUsed ?? attempts.length}${maxAttempts !== undefined ? ` / ${maxAttempts}` : ''} attempts used${latest ? ` · Last activity ${age(latest.finishedAt || latest.startedAt)}` : ' · Not started'}`, 'task-meta'));
+  const running = ['running', 'needs_review'].includes(task.status);
+  if (latest) card.append(timingNode(latest, running));
   if (latest?.phase && !latest.finishedAt && latest.phase !== 'finished') card.append(node('p', `Current phase: ${label(latest.phase)}`, 'task-meta'));
   verificationProgress(card, latest?.verificationProgress);
   if (latest) {
@@ -97,7 +141,8 @@ function renderTask(task, maxAttempts, openKeys, key = task.id) {
     for (const attempt of [...attempts].reverse()) {
       const row = node('div', undefined, 'attempt');
       row.append(node('h3', `Attempt ${attempt.number}`));
-      row.append(node('p', `${attempt.startedAt}${attempt.finishedAt ? ` → ${attempt.finishedAt}` : ' · In progress'}`, 'task-meta'));
+      row.append(timingNode(attempt, running && attempt === latest));
+      row.append(node('p', `${attempt.startedAt ?? 'Start unavailable'}${attempt.finishedAt != null ? ` → ${attempt.finishedAt}` : running && attempt === latest ? ' · In progress' : ' · Finish unavailable'}`, 'task-meta'));
       const checks = node('div', undefined, 'checks');
       checks.append(badge(attempt.outcome || 'running'), verification(attempt.verification, 'Verification'));
       if (attempt.flakyCount > 0) checks.append(node('span', `Passed on rerun: ${attempt.flakyCount}`, 'task-meta'));
@@ -150,6 +195,7 @@ async function refresh() {
   } finally { loading = false; }
 }
 function showDetails(entry) {
+  liveTimings = [];
   const details = $('details');
   const openKeys = new Set(Array.from(details.querySelectorAll('details[open]'), item => item.dataset.key));
   const focusedDisclosure = Array.from(details.querySelectorAll('details')).find(item => item.firstElementChild === document.activeElement);
@@ -185,14 +231,28 @@ function showDetails(entry) {
     stat.append(node('span', value, 'stat-value'), node('span', title, 'stat-label')); stats.append(stat);
   }
   details.append(stats);
-  const progress = node('div', undefined, 'progress');
-  const fill = node('div', undefined, 'progress-fill');
-  const percent = tasks.length ? Math.round(completed / tasks.length * 100) : 0;
-  fill.style.width = `${percent}%`; progress.append(fill); details.append(progress);
-  details.append(node('p', `${percent}% of tasks accepted · Created ${run.createdAt}`, 'task-meta'));
+  details.append(node('p', `Created ${run.createdAt}`, 'task-meta'));
   const checks = node('div', undefined, 'checks');
-  checks.append(verification(run.finalVerification, 'Final verification'));
-  verificationProgress(checks, run.finalVerificationProgress);
+  const finalProgress = run.finalVerificationProgress;
+  if (finalProgress?.status) checks.append(badge(finalProgress.status, `Final verification: ${label(finalProgress.status)}`));
+  else checks.append(verification(run.finalVerification, 'Final verification'));
+  if (finalProgress?.status && run.finalVerification) checks.append(verification(run.finalVerification, 'Final result'));
+  verificationProgress(checks, finalProgress);
+  if (finalProgress?.status === 'running' && !(Number.isSafeInteger(finalProgress.total) && finalProgress.total > 0)) {
+    const startedAt = typeof finalProgress.startedAt === 'string' ? Date.parse(finalProgress.startedAt) : NaN;
+    if (Number.isFinite(startedAt)) {
+      const elapsed = node('p', undefined, 'task-meta');
+      const update = () => {
+        const ms = Date.now() - startedAt;
+        elapsed.textContent = ms >= 0 ? `Final verification elapsed: ${formatDuration(ms)}` : 'Final verification timing unavailable';
+      };
+      update();
+      liveTimings.push({ update });
+      checks.append(elapsed);
+    }
+  }
+  if (finalProgress?.currentCheck) checks.append(node('p', `Current check: ${finalProgress.currentCheck}`, 'task-meta'));
+  for (const check of finalProgress?.checks || []) checks.append(badge(check.passed ? 'passed' : 'failed', `Check ${check.ordinal}: ${check.passed ? 'passed' : 'failed'}`));
   if (run.finalVerification?.checkedAt) checks.append(node('span', run.finalVerification.checkedAt, 'task-meta'));
   details.append(checks);
   if (run.autoReplans?.length) {
@@ -220,13 +280,24 @@ function showDetails(entry) {
     for (const integration of run.integrations) {
       const card = node('article', undefined, 'task-card');
       card.append(node('h3', `Integration ${integration.number ?? '—'}`), badge(integration.status));
-      if (integration.phase) card.append(node('p', `Phase: ${label(integration.phase)}${integration.phaseUpdatedAt ? ` · ${age(integration.phaseUpdatedAt)}` : ''}`, 'task-meta'));
+      if (integration.phase) {
+        const phase = node('p', undefined, 'task-meta');
+        const update = () => { phase.textContent = `Phase: ${label(integration.phase)}${integration.phaseUpdatedAt ? ` · Phase started ${age(integration.phaseUpdatedAt)}` : ''}`; };
+        update();
+        liveTimings.push({ update });
+        card.append(phase);
+      }
+      if (integration.failedPhase) card.append(node('p', `Failed phase: ${label(integration.failedPhase)}`, 'task-meta'));
+      if (integration.status === 'ready' && (!integration.phase || integration.phase === 'awaiting_publication')) card.append(node('p', 'Waiting for operator publication approval.', 'task-meta'));
+      if (integration.status === 'pr-opened') card.append(node('p', 'Waiting for pull request merge and reconciliation.', 'task-meta'));
+      if (integration.status === 'publishing' || integration.status === 'pr-publishing') card.append(node('p', 'Publication in progress; if interrupted, manual reconciliation is required.', 'task-meta'));
       verificationProgress(card, integration.verificationProgress);
       for (const id of integration.requiredReviewers || []) {
         if (!(integration.reviews || []).some(review => review.reviewer === id)) card.append(badge('pending', `${id}: pending`));
       }
       const checks = node('div', undefined, 'checks');
       checks.append(verification(integration.verification, 'Verification'), verification(integration.publicationVerification, 'Publication verification'));
+      if (integration.uiEvidence) checks.append(verification(integration.uiEvidence, 'UI evidence'));
       card.append(checks);
       if (integration.error) issue(card, 'Integration error', integration.error);
       reviews(card, integration.reviews); details.append(card);
@@ -243,6 +314,7 @@ function showDetails(entry) {
 }
 function selectRun(id) {
   selected = id; generation++;
+  liveTimings = [];
   for (const button of $('runs').querySelectorAll('button')) button.setAttribute('aria-pressed', String(button.dataset.runId === id));
   if (stream) stream.close();
   $('details').replaceChildren(); $('timeline').replaceChildren();
@@ -282,4 +354,4 @@ function selectRun(id) {
 }
 $('refresh').addEventListener('click', refresh);
 refresh();
-setInterval(refresh, 5000);
+setInterval(() => { updateLiveTimings(); return refresh(); }, 5000);

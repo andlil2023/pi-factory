@@ -56,6 +56,8 @@ export interface TaskContext {
     taskVerification: Array<{ taskId: string; attempt: number; checkpoint?: string; result: unknown }>;
   };
   onVerificationProgress?(progress: VerificationProgress): Promise<void>;
+  /** Include per-check live progress for final verification. */
+  finalVerificationProgress?: boolean;
   requiredReviewers?: string[];
   uiEvidence?: UiEvidenceRecord;
   /** Run every trusted verification command, ignoring task-level selection. */
@@ -68,7 +70,7 @@ export interface OrchestratorAdapters {
   collectUiEvidence?(context: TaskContext): Promise<UiEvidenceRecord>;
   review(context: TaskContext, implementation: ImplementationResult, verification: VerificationResult, onReview?: ReviewProgress): Promise<ReviewResult[]>;
   checkpoint?(context: TaskContext): Promise<{ commit: string }>;
-  finalVerify?(): Promise<VerificationResult>;
+  finalVerify?(onProgress: (progress: VerificationProgress) => Promise<void>): Promise<VerificationResult>;
   /** Whether the worktree differs from the last checkpoint. Lets a final repair that changed nothing be withdrawn. */
   hasChanges?(context: TaskContext): Promise<boolean>;
 }
@@ -124,9 +126,22 @@ export class Orchestrator {
       const remaining = tasks.filter(t => state.tasks[t.id].status !== 'completed');
       if (!remaining.length) {
         if (this.adapters.finalVerify) {
+          const startedAt = new Date().toISOString();
+          state.finalVerificationProgress = { mode: 'full', completed: 0, total: 0, failed: 0, status: 'running', checks: [], startedAt };
+          delete state.finalVerification;
+          await this.store.save(state);
           try {
-            const final = await this.adapters.finalVerify();
+            const final = await this.adapters.finalVerify(async progress => {
+              state.finalVerificationProgress = {
+                mode: progress.mode, completed: progress.completed, total: progress.total, failed: progress.failed,
+                status: 'running', startedAt, ...(progress.currentCheck === undefined ? {} : { currentCheck: progress.currentCheck }),
+                ...(progress.checks ? { checks: progress.checks.map(check => ({ ordinal: check.ordinal, passed: check.passed })) } : {})
+              };
+              await this.store.save(state);
+            });
             state.finalVerification = { ...final, checkedAt: new Date().toISOString() };
+            state.finalVerificationProgress.status = final.passed ? 'passed' : 'failed';
+            delete state.finalVerificationProgress.currentCheck;
             this.options.events?.emit({type: final.passed ? 'FINAL_VERIFICATION_PASSED' : 'FINAL_VERIFICATION_FAILED'});
             const repairs = state.finalRepairs ?? [];
             if (!final.passed && repairs.length < (this.options.maxFinalRepairs ?? 0)) {
@@ -151,6 +166,8 @@ export class Orchestrator {
               return state;
             }
           } catch (error) {
+            state.finalVerificationProgress!.status = 'failed';
+            delete state.finalVerificationProgress!.currentCheck;
             state.finalVerification = { passed: false, details: String(error), checkedAt: new Date().toISOString() };
             state.status = 'blocked';
             this.options.events?.emit({type:'FINAL_VERIFICATION_FAILED',message:String(error)});
@@ -216,6 +233,8 @@ export class Orchestrator {
             taskState.lastError = 'Implementation failed';
           } else {
             await phase('verifying');
+            this.options.events?.emit({type:'VERIFICATION_STARTED',taskId:ready.id,attempt:attempt.number});
+            await this.options.events?.flush();
             const verification = await this.adapters.verify(context);
             attempt.verification = verification;
             this.options.events?.emit({type:verification.passed?'VERIFICATION_PASSED':'VERIFICATION_FAILED',taskId:ready.id,attempt:attempt.number});

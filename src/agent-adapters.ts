@@ -165,9 +165,13 @@ export function createAgentAdapters(config: AgentAdapterConfig): OrchestratorAda
           reasons: ['Selection failed; running full verification'] };
       }
       const checks: VerificationCheck[] = [];
-      const progress = async () => context.onVerificationProgress?.({
+      const progress = async (currentCheck?: number) => context.onVerificationProgress?.({
         mode: selection.mode, completed: checks.length, total: selection.commands.length,
-        failed: checks.filter(check => !check.passed).length
+        failed: checks.filter(check => !check.passed).length,
+        ...(context.finalVerificationProgress ? {
+          ...(currentCheck === undefined ? {} : { currentCheck }),
+          checks: checks.map((check, index) => ({ ordinal: index + 1, passed: check.passed }))
+        } : {})
       });
       const run = async (check: {executable:string;args?:string[];timeoutMs?:number}, index: number, rerun: number): Promise<VerificationCheck> => {
         const command = [check.executable,...(check.args??[])].join(' ');
@@ -196,6 +200,7 @@ export function createAgentAdapters(config: AgentAdapterConfig): OrchestratorAda
       await progress();
       const reruns = config.verificationReruns ?? 0;
       for (const [index, command] of selection.commands.entries()) {
+        if (context.finalVerificationProgress) await progress(index + 1);
         let check = await run(command, index, 0);
         for (let rerun = 1; !check.passed && rerun <= reruns; rerun++) {
           const again = await run(command, index, rerun);

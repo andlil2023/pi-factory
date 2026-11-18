@@ -125,6 +125,7 @@ export async function prepareIntegration(store: StateStore, state: FactoryRunSta
     } catch {
       record.conflicts = (await git(record.worktree, ['diff', '--name-only', '--diff-filter=U', '-z'])).split('\0').filter(Boolean);
       record.status = record.conflicts.length ? 'conflicted' : 'blocked';
+      record.failedPhase = record.phase;
       record.phase = 'stopped';
       record.phaseUpdatedAt = new Date().toISOString();
       record.error = record.conflicts.length ? 'Merge conflicts preserved for human inspection' : 'Git merge failed; integration worktree preserved for inspection';
@@ -178,6 +179,7 @@ export async function prepareIntegration(store: StateStore, state: FactoryRunSta
     record.status = 'ready';
     await setPhase(store, state, record, 'awaiting_publication');
   } catch (error) {
+    record.failedPhase = record.phase;
     record.phase = 'stopped';
     record.phaseUpdatedAt = new Date().toISOString();
     if (record.status !== 'stale') record.status = 'blocked';
@@ -193,6 +195,9 @@ async function publicationPreflight(store: StateStore, state: FactoryRunState, o
   const record = state.integrations?.at(-1);
   if (!record || record.status !== 'ready' || record.commit !== candidate) throw new Error('Publication requires the latest ready candidate and its exact --candidate SHA');
   try {
+    delete record.failedPhase;
+    delete record.error;
+    await setPhase(store, state, record, 'publication_checking');
     await assertPinnedRefs(state, record);
     await assertCandidate(state, record);
     const required = record.reviewSelection?.requiredReviewers;
@@ -211,6 +216,7 @@ async function publicationPreflight(store: StateStore, state: FactoryRunState, o
       : await adapters.verify(contextFor(state, record, options, store));
     await store.save(state);
     if (!record.publicationVerification.passed) throw new Error('Pre-publication verification failed');
+    await setPhase(store, state, record, 'publication_checking');
     if (required.includes('ui') && adapters.collectUiEvidence) {
       if (!record.uiEvidence || record.uiEvidence.manifest?.taskId !== options.task.id || record.uiEvidence.manifest?.attempt !== record.number) throw new Error('Required integration UI evidence is missing');
       await assertUiEvidenceCurrent(record.uiEvidence, record.worktree);
@@ -220,6 +226,7 @@ async function publicationPreflight(store: StateStore, state: FactoryRunState, o
     await assertCheckoutCheckpoint(state.repository, record.targetBranch, record.targetHead);
   } catch (error) {
     record.status = 'blocked';
+    record.failedPhase = record.phase;
     record.phase = 'stopped';
     record.phaseUpdatedAt = new Date().toISOString();
     record.error = error instanceof Error ? error.message.split('\n')[0] : 'Publication preflight failed';
@@ -229,11 +236,23 @@ async function publicationPreflight(store: StateStore, state: FactoryRunState, o
   return record;
 }
 
+async function recordPublicationCheckFailure(store: StateStore, state: FactoryRunState, record: IntegrationAttempt): Promise<void> {
+  // No publication has started: retain ready eligibility, but persist a safe outcome.
+  record.failedPhase = record.phase;
+  record.error = 'Publication checks failed; inspect the candidate and destination before retrying';
+  await setPhase(store, state, record, 'stopped');
+}
+
 /** Explicit second approval names the exact reviewed commit; never rewrites target history. */
 export async function publishIntegration(store: StateStore, state: FactoryRunState, options: IntegrationOptions, candidate: string): Promise<IntegrationAttempt> {
   if (await git(state.repository, ['remote'])) throw new Error('Local publication is disabled for repositories with configured remotes; use GitHub PR publication');
   const record = await publicationPreflight(store, state, options, candidate);
-  if (await git(state.repository, ['remote'])) throw new Error('Local publication is disabled for repositories with configured remotes; use GitHub PR publication');
+  try {
+    if (await git(state.repository, ['remote'])) throw new Error('Local publication is disabled for repositories with configured remotes; use GitHub PR publication');
+  } catch (error) {
+    await recordPublicationCheckFailure(store, state, record);
+    throw error;
+  }
   record.status = 'publishing';
   record.publishApprovedAt = new Date().toISOString();
   await setPhase(store, state, record, 'publishing');
@@ -297,11 +316,17 @@ export async function reconcilePullRequest(store: StateStore, state: FactoryRunS
 export async function publishPullRequest(store: StateStore, state: FactoryRunState, options: IntegrationOptions, candidate: string): Promise<IntegrationAttempt> {
   const record = await publicationPreflight(store, state, options, candidate);
   const api = options.github ?? github;
-  const destination = await api.githubDestination(state.repository, record.targetBranch, record.targetHead, record.branch, candidate);
-  if (await api.remoteHead(state.repository, destination.pushUrl, destination.base) !== destination.baseSha) throw new Error('GitHub base differs from the reviewed target; prepare a new candidate');
-  if (await api.remoteHead(state.repository, destination.pushUrl, destination.head) !== undefined) throw new Error('GitHub candidate branch already exists; inspect it before proceeding');
-  await assertPinnedRefs(state, record);
-  await assertCandidate(state, record);
+  let destination: Awaited<ReturnType<typeof api.githubDestination>>;
+  try {
+    destination = await api.githubDestination(state.repository, record.targetBranch, record.targetHead, record.branch, candidate);
+    if (await api.remoteHead(state.repository, destination.pushUrl, destination.base) !== destination.baseSha) throw new Error('GitHub base differs from the reviewed target; prepare a new candidate');
+    if (await api.remoteHead(state.repository, destination.pushUrl, destination.head) !== undefined) throw new Error('GitHub candidate branch already exists; inspect it before proceeding');
+    await assertPinnedRefs(state, record);
+    await assertCandidate(state, record);
+  } catch (error) {
+    await recordPublicationCheckFailure(store, state, record);
+    throw error;
+  }
   record.pullRequest = { ...destination };
   record.status = 'pr-publishing';
   record.publishApprovedAt = new Date().toISOString();
