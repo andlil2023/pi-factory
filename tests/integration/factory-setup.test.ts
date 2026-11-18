@@ -53,12 +53,32 @@ test('setup commands prepare the run worktree and each integration worktree befo
   const invalid = runCli('integrate', '--repo', repository, '--run', completed.runId, '--approve', '--publish', '--candidate', 'unused', '--guidance', guidancePath);
   assert.equal(invalid.status, 1, subprocessDiagnostics(invalid));
   assert.match(invalid.stderr, /--guidance is only valid/);
+  for (const conflict of [['--publish'], ['--candidate', 'unused'], ['--new-attempt'], ['--guidance', guidancePath]]) {
+    // No repo or run: conflict validation must precede even lock acquisition.
+    const result = runCli('integrate', '--reconcile', ...conflict);
+    assert.equal(result.status, 1, subprocessDiagnostics(result));
+    assert.match(result.stderr, /--reconcile cannot be combined/);
+  }
+  // An absent config and approval must not mask the actual reconciliation eligibility error.
+  const reconcile = spawnSync(process.execPath, ['--experimental-strip-types', cli, 'integrate', '--repo', repository, '--run', completed.runId, '--reconcile', '--config', join(repository, 'missing-config.json')], { encoding: 'utf8', timeout: 180_000 });
+  assertSubprocessStarted(reconcile);
+  assert.equal(reconcile.status, 1, subprocessDiagnostics(reconcile));
+  assert.match(reconcile.stderr, /Reconciliation requires a completed run and an open PR/);
   const prepared = runCli('integrate', '--repo', repository, '--run', completed.runId, '--approve', '--guidance', guidancePath);
   assert.equal(prepared.status, 0, subprocessDiagnostics(prepared));
   const integration = (JSON.parse(await readFile(statePath, 'utf8')) as FactoryRunState).integrations!.at(-1)!;
   assert.equal(integration.status, 'ready');
   assert.equal(integration.guidance, 'Approved evidence location: C:/evidence/report.json');
   assert.equal(await readFile(join(integration.worktree, 'installed.txt'), 'utf8'), 'ok');
+  const published = JSON.parse(await readFile(statePath, 'utf8')) as FactoryRunState;
+  published.integrations!.at(-1)!.status = 'published';
+  await writeFile(statePath, JSON.stringify(published));
+  const before = await readFile(statePath, 'utf8');
+  const already = spawnSync(process.execPath, ['--experimental-strip-types', cli, 'integrate', '--repo', repository, '--run', completed.runId, '--reconcile', '--config', join(repository, 'missing-config.json')], { encoding: 'utf8', timeout: 180_000 });
+  assertSubprocessStarted(already);
+  assert.equal(already.status, 0, subprocessDiagnostics(already));
+  assert.match(already.stdout, /published \(already published\)/);
+  assert.equal(await readFile(statePath, 'utf8'), before);
 });
 
 test('a failing setup command stops before any agent runs and names the command', async t => {
