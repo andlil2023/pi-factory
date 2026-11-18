@@ -25,6 +25,7 @@ import { validateSelectionConfig, type SelectionConfig } from './selection-confi
 import { DashboardReader } from './dashboard-reader.ts';
 import { diagnoseRepository } from './doctor-repository.ts';
 import { diagnoseRuns } from './doctor-runs.ts';
+import { addIntegrationRepair, integrationRepairEligible } from './integration-repair.ts';
 
 interface Config {
   /** `planReviewer` defaults to `reviewer`. */
@@ -527,7 +528,7 @@ async function integrateCommand(flags:Record<string,string|boolean>):Promise<voi
   try {
     const releaseRun=await acquireRunLock(store.directory,runId,flags['recover-lock']===true);
     try {
-      const state=await store.load(runId);
+      let state=await store.load(runId);
       if (await realpath(repository)!==await realpath(state.repository)) throw new Error('Run repository mismatch');
       const plan=await validator.validate<Plan>('plan',state.plan);
       if (!plan.valid || plan.value.decisions.some(decision=>decision.blocking)) throw new Error('Persisted plan is invalid or has unresolved blocking decisions');
@@ -551,9 +552,29 @@ async function integrateCommand(flags:Record<string,string|boolean>):Promise<voi
           verificationReruns:config.execution?.verificationReruns??1,logDirectory:join(store.directory,runId,'integration-logs',String(attempt)),
           uiEvidence:config.uiEvidence?{command:config.uiEvidence.command,directory:join(store.directory,runId,'integration-evidence',String(attempt))}:undefined})
       };
-      const record=flags.publish===true
+      let record=flags.publish===true
         ? await (await hasGitRemote(repository) ? publishPullRequest : publishIntegration)(store,state,options,required(flags,'candidate'))
         : await prepareIntegration(store,state,options,flags['new-attempt']===true);
+      const maxRepairs=config.execution?.maxIntegrationRepairs??2;
+      while (flags.publish!==true && integrationRepairEligible(state,record,maxRepairs)) {
+        const observed=await validateRunGitState(state,repository);
+        if (observed.targetHead!==record.targetHead) break;
+        state=addIntegrationRepair(state,record,maxRepairs);
+        const repair=state.integrationRepairs!.at(-1)!;
+        await store.save(state);
+        const message=`Integration ${record.number} blocked; added repair task ${repair.taskId} (${state.integrationRepairs!.length} of ${maxRepairs})`;
+        const events=new FactoryEventBus({runId,logFile:join(repository,'.factory','runs',`${runId}.events.jsonl`)});
+        try { events.emit({type:'PLAN_REVISED',taskId:repair.taskId,message}); } finally { await events.close(); }
+        console.log(message);
+        await executeRun(store,state,config);
+        if (state.status!=='completed' || repair.withdrawn) break;
+        const revised=state.plan as Plan;
+        options.task={id:'T000',title:'Verify cumulative run integration',objective:revised.objective,
+          scope:revised.tasks.map(task=>`${task.id}: ${task.scope}`).join('\n'),
+          acceptanceCriteria:revised.tasks.flatMap(task=>task.acceptanceCriteria.map(criterion=>`${task.id}: ${criterion}`)),
+          dependencies:[],verification:revised.verification};
+        record=await prepareIntegration(store,state,options,true);
+      }
       console.log(`Integration ${record.number}: ${record.status}; worktree: ${record.worktree}`);
       if (record.commit) console.log(`Candidate: ${record.commit}`);
       if (record.pullRequest?.url) console.log(`Pull request: ${record.pullRequest.url}`);
