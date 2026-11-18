@@ -70,6 +70,11 @@ test('dashboard reader projects state, isolates unavailable runs, and limits eve
     await writeFile(join(dir, 'integration.json'), JSON.stringify(integrationState));
     const readyIntegration = await reader.readRun('integration'); assert.ok(readyIntegration.available);
     assert.equal(readyIntegration.run.integrations[1].phase, 'awaiting_publication');
+    for (const [status, expected] of [['running', 'running'], ['completed', 'integration_blocked']] as const) {
+      await writeFile(join(dir, 'repair.json'), JSON.stringify({ ...state, runId: 'repair', status, integrations: [integrationState.integrations[0]] }));
+      const repair = await reader.readRun('repair'); assert.ok(repair.available);
+      assert.equal(repair.run.deliveryStatus, expected);
+    }
     // Even malformed optional fields must not bypass the projection allowlist.
     const malformed = { ...state, runId: 'malformed', execution: { maxAttempts: { prompt: 'SECRET_CONFIG' } }, finalVerification: { passed: true, checkedAt: { artifact: 'SECRET_ARTIFACT' } }, integrations: [{ number: { prompt: 'SECRET_PROMPT' }, status: { artifact: 'SECRET_ARTIFACT' }, error: { stdout: 'SECRET_OUTPUT' }, reviews: [{ reviewer: { prompt: 'SECRET_PROMPT' }, verdict: { artifact: 'SECRET_ARTIFACT' } }] }] };
     await writeFile(join(dir, 'malformed.json'), JSON.stringify(malformed));
