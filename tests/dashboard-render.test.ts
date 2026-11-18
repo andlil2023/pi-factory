@@ -72,6 +72,36 @@ test('descriptive names, IDs and intended work render as text with narrow-layout
   assert.match(css, /@media\s*\(max-width:\s*640px\)/);
 });
 
+test('revisions and rerun-passed attempts render safely and only when present', async () => {
+  const elements = Object.fromEntries(['runs', 'list-status', 'refresh', 'details', 'detail-heading', 'detail-status', 'timeline', 'connection'].map(id => [id, new Element(id)]));
+  const context = {
+    document: { getElementById: (id: string) => elements[id], createElement: (tag: string) => new Element(tag), activeElement: null },
+    fetch: async () => ({ ok: true, json: async () => [] }), setInterval() {}, showDetails: (_entry: unknown) => {}
+  };
+  runInNewContext(await readFile(new URL('../src/dashboard/dashboard.js', import.meta.url), 'utf8'), context);
+  await new Promise(resolve => setImmediate(resolve));
+  const entry = { runId: 'run', available: true, run: {
+    status: 'running', createdAt: '2025-01-01', updatedAt: '2025-01-02',
+    autoReplans: [{ at: '2025-02-03', taskId: '<img src=x>', reason: 'budget_exhausted', superseded: ['old'], added: ['new-1', 'new-2'], hasLeftoverPatch: true }],
+    tasks: [{ id: 'task', status: 'completed', attempts: [{ number: 1, startedAt: '2025-01-01', flakyCount: 2 }] }]
+  } };
+  context.showDetails(entry);
+  const details = elements.details;
+  const revisions = details.querySelectorAll('details').find(item => item.dataset.key === 'revisions')!;
+  assert.match(text(revisions), /Automatic plan revisions \(1\)/);
+  for (const value of ['2025-02-03', '<img src=x>', 'Repair budget exhausted', 'old', 'new-1', 'new-2', 'Leftover patch saved']) assert.ok(text(revisions).includes(value));
+  assert.equal(details.querySelectorAll('img').length, 0);
+  assert.match(text(details), /Passed on rerun: 2/);
+  revisions.open = true;
+  context.showDetails(entry);
+  assert.equal(details.querySelectorAll('details').find(item => item.dataset.key === 'revisions')!.open, true);
+  context.showDetails({ ...entry, run: { ...entry.run, autoReplans: [{ ...entry.run.autoReplans[0], reason: 'task_too_large', hasLeftoverPatch: false }], tasks: [{ id: 'task', status: 'completed', attempts: [{ number: 1, startedAt: '2025-01-01', flakyCount: 0 }] }] } });
+  assert.match(text(details), /Task too large/);
+  assert.doesNotMatch(text(details), /Leftover patch saved|Passed on rerun/);
+  context.showDetails({ ...entry, run: { ...entry.run, autoReplans: [] } });
+  assert.doesNotMatch(text(details), /Automatic plan revisions/);
+});
+
 test('run details prioritize actionable cards, preserve expanded history and safely render events', async () => {
   const elements = Object.fromEntries(['runs', 'list-status', 'refresh', 'details', 'detail-heading', 'detail-status', 'timeline', 'connection'].map(id => [id, new Element(id)]));
   let snapshot: (event: { data: string }) => void = () => {};
