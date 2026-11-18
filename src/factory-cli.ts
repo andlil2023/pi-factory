@@ -36,7 +36,7 @@ interface Config {
   uiEvidence?: { command: UiEvidenceCommand };
   /** `maxAutoReplans`: plan revisions the factory may apply without an operator per run; 0 always stops. Default 2.
    * `maxFinalRepairs`: repair tasks added after a failed final verification; 0 blocks at once. Default 2.
-   * `reuseVerification`: accept an earlier passing full verification of the identical Git tree instead of rerunning it. Default true. */
+   * `reuseVerification`: final verification and publication accept an earlier passing full verification of the identical content instead of rerunning it. Default true. */
   execution?: { maxAttempts?: number; maxInfraRetries?: number; verificationReruns?: number; maxAutoReplans?: number; maxFinalRepairs?: number; reuseVerification?: boolean };
   verification?: Array<{ executable: string; args?: string[]; timeoutMs?: number }>;
   verificationSelection?: SelectionConfig;
@@ -251,13 +251,6 @@ async function runVerificationCommand(cwd: string, command: {executable:string;a
   });
 }
 
-async function gitTree(worktree:string):Promise<string> {
-  const outcome=await runVerificationCommand(worktree,{executable:'git',args:['rev-parse','HEAD^{tree}'],timeoutMs:60000});
-  const tree=outcome.stdout.trim();
-  if (!outcome.passed || !/^[a-f0-9]{40,64}$/.test(tree)) throw new Error('Unable to read the Git tree of the run worktree');
-  return tree;
-}
-
 /** A fresh worktree has no ignored files such as node_modules; nothing else installs them before deterministic verification. */
 async function runSetup(worktree:string,config:Config):Promise<void> {
   for (const command of config.setup ?? []) {
@@ -452,19 +445,24 @@ async function executeRun(store:StateStore,state:FactoryRunState,config:Config):
     finalVerify: async () => {
       // Every trusted command against the final committed worktree, whatever the tasks selected.
       await assertRunCheckpoint(state);
-      const tree = await gitTree(worktree.path);
-      // The last checkpoint commits exactly the tree its task verification ran on. If that verification
-      // already ran every trusted command and passed, running them again on the same tree proves nothing new.
+      // The last checkpoint commits exactly the tree its task verification ran on, in this same worktree. If that
+      // verification ran every trusted command and passed first time, running them again here proves nothing new.
+      // A pass that needed a rerun is not reused: final verification is then the independent second opinion.
       const accepted = Object.values(state.tasks).flatMap(task => task.attempts.map(attempt => ({task, attempt}))).find(entry => entry.attempt.checkpointCommit === git.expectedHead);
-      const prior = accepted?.attempt.verification as {passed?:unknown;details?:{mode?:unknown}}|undefined;
-      if (config.execution?.reuseVerification !== false && accepted && prior?.passed === true && prior.details?.mode === 'full') {
-        return {passed:true,details:{mode:'full',reused:{from:'task verification',taskId:accepted.task.id,attempt:accepted.attempt.number,checkpoint:git.expectedHead}},tree};
+      const prior = accepted?.attempt.verification as {passed?:unknown;details?:{mode?:unknown;flaky?:unknown}}|undefined;
+      if (config.execution?.reuseVerification !== false && accepted && prior?.passed === true && prior.details?.mode === 'full' && prior.details.flaky === undefined) {
+        return {passed:true,details:{mode:'full',reused:{from:'task verification',taskId:accepted.task.id,attempt:accepted.attempt.number,checkpoint:git.expectedHead}}};
       }
       const result = await adapters.verify({task:{id:'FINAL',title:'Final verification',objective:'',scope:'',acceptanceCriteria:[],dependencies:[],verification:[]},
         attempt:(state.finalRepairs?.length??0)+1,previousFeedback:[],fullVerification:true,
         onVerificationProgress:async progress => { state.finalVerificationProgress = progress; await store.save(state); }});
       await assertRunCheckpoint(state);
-      return {...result,tree};
+      return result;
+    },
+    hasChanges: async () => {
+      const outcome = await runVerificationCommand(worktree.path,{executable:'git',args:['status','--porcelain','--untracked-files=all'],timeoutMs:60000});
+      if (!outcome.passed) throw new Error('Unable to read the status of the run worktree');
+      return outcome.stdout.trim() !== '';
     }
   };
   const events=new FactoryEventBus({runId,logFile:join(repository,'.factory','runs',`${runId}.events.jsonl`)});

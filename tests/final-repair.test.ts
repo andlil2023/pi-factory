@@ -31,7 +31,7 @@ test('a failed final verification adds a fully verified, reviewed repair task an
     implement: async context => { contexts.push(structuredClone({ ...context, onVerificationProgress: undefined })); return { outcome: 'implemented', report: {} }; },
     verify: async context => ({ passed: true, details: { mode: context.fullVerification ? 'full' : 'selected' } }),
     review: async () => [{ reviewer: 'code', verdict: 'approved', report: {} }],
-    finalVerify: async () => ++finals === 1 ? failedFinal : { passed: true, details: {}, tree: 'a'.repeat(40) }
+    finalVerify: async () => ++finals === 1 ? failedFinal : { passed: true, details: {} }
   };
   const result = await new Orchestrator(store, adapters, { maxFinalRepairs: 2 }).execute(state, tasks);
   assert.equal(result.status, 'completed');
@@ -47,7 +47,6 @@ test('a failed final verification adds a fully verified, reviewed repair task an
   const saved = await store.load(state.runId);
   assert.equal(saved.finalRepairs?.length, 1);
   assert.equal(saved.finalRepairs![0].taskId, 'T003');
-  assert.equal(saved.finalVerification?.tree, 'a'.repeat(40));
   assert.deepEqual((saved.plan as { tasks: PlannedTask[] }).tasks.map(item => item.id), ['T001', 'T002', 'T003'], 'the persisted plan matches task state, so the run can be resumed');
   assert.equal(saved.planRevisions?.length, 1);
   assert.equal(saved.tasks.T003.attempts[0].verification && (saved.tasks.T003.attempts[0].verification as { details: { mode: string } }).details.mode, 'full');
@@ -82,6 +81,52 @@ test('a repair task that cannot be completed blocks the run and is never replann
   assert.equal(result.status, 'blocked');
   assert.match(result.tasks.T003.lastError!, /Maximum attempts \(2\) exhausted/);
   assert.equal(autoReplanCandidate(result, 2, 2), undefined);
+});
+
+test('a final failure that does not reproduce withdraws the repair task instead of blocking on an empty commit', async t => {
+  const { store, state, tasks } = await fixture(t);
+  let finals = 0, reviews = 0, checkpoints = 0;
+  const result = await new Orchestrator(store, {
+    implement: async () => ({ outcome: 'implemented', report: {} }),
+    verify: async () => ({ passed: true, details: {} }),
+    review: async () => { reviews++; return [{ reviewer: 'code', verdict: 'approved', report: {} }]; },
+    checkpoint: async () => ({ commit: `commit-${++checkpoints}` }),
+    // The transient failure left nothing to change.
+    hasChanges: async context => context.task.id !== 'T003',
+    finalVerify: async () => ++finals === 1 ? failedFinal : { passed: true, details: {} }
+  }, { maxFinalRepairs: 2 }).execute(state, tasks);
+  assert.equal(result.status, 'completed');
+  assert.equal(finals, 2);
+  assert.deepEqual([reviews, checkpoints], [2, 2], 'nothing to review or commit for the withdrawn repair');
+  const saved = await store.load(state.runId);
+  assert.deepEqual(Object.keys(saved.tasks), ['T001', 'T002']);
+  assert.deepEqual((saved.plan as { tasks: PlannedTask[] }).tasks.map(item => item.id), ['T001', 'T002']);
+  assert.deepEqual(tasks.map(item => item.id), ['T001', 'T002']);
+  assert.equal(saved.finalRepairs![0].withdrawn, true);
+  assert.deepEqual(saved.supersededTasks?.map(entry => entry.task.id), ['T003'], 'the attempt history is kept and the ID is retired');
+});
+
+test('a repair attempt that only timed out does not hide the failed final checks', async t => {
+  const { store, state, tasks } = await fixture(t);
+  state.execution = { maxAttempts: 3, maxInfraRetries: 1, configurationFingerprint: 'test' };
+  const seen: Array<{ attempt: number; failures: string[]; notes: string[] }> = [];
+  let finals = 0;
+  const { AgentExecutionError } = await import('../src/agent-error.ts');
+  await new Orchestrator(store, {
+    implement: async context => {
+      if (context.task.id === 'T003') {
+        seen.push({ attempt: context.attempt, failures: context.feedback!.open.failedChecks.flatMap(check => check.failures), notes: context.feedback!.notes });
+        if (context.attempt === 1) throw new AgentExecutionError('implementer', true, 'PI timed out after 600000 ms');
+      }
+      return { outcome: 'implemented', report: {} };
+    },
+    verify: async () => ({ passed: true, details: {} }),
+    review: async () => [{ reviewer: 'code', verdict: 'approved', report: {} }],
+    finalVerify: async () => ++finals === 1 ? failedFinal : { passed: true, details: {} }
+  }, { maxFinalRepairs: 1 }).execute(state, tasks);
+  assert.deepEqual(seen.map(entry => entry.attempt), [1, 2]);
+  assert.deepEqual(seen[1].failures, ['not ok 4 - combined behavior breaks']);
+  assert.ok(seen[1].notes.some(note => /session time limit/.test(note)));
 });
 
 test('final failure feedback and timeout notes guide the next session', () => {

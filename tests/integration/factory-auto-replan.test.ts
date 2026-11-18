@@ -62,9 +62,8 @@ test('CLI reviews a new plan, then replans a too-large task and completes the ru
   assert.equal(state.planRevisions?.length, 1);
   assert.equal(state.autoReplans?.length, 1);
   // No task selection is configured, so the last task ran every trusted command on the tree it committed: final verification reuses it.
-  const final = state.finalVerification as { passed: boolean; tree?: string; details: { reused?: { from: string; taskId: string } } };
+  const final = state.finalVerification as { passed: boolean; details: { reused?: { from: string; taskId: string } } };
   assert.deepEqual([final.passed, final.details.reused?.from, final.details.reused?.taskId], [true, 'task verification', 'T004']);
-  assert.match(final.tree ?? '', /^[a-f0-9]{40}$/);
   const record = state.autoReplans![0];
   assert.deepEqual([record.taskId, record.reason, record.superseded, record.added], ['T002', 'task_too_large', ['T002'], ['T003', 'T004']]);
   assert.match(await readFile(record.leftoverPatch!, 'utf8'), /PARTIAL_WORK_OF_T002/);

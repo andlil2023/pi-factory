@@ -104,9 +104,9 @@ export interface FactoryRunState {
   /** Plan revisions the factory applied without an operator; bounded by execution.maxAutoReplans. */
   autoReplans?: Array<{ at: string; taskId: string; reason: 'task_too_large' | 'budget_exhausted'; superseded: string[]; added: string[]; leftoverPatch?: string }>;
   finalVerificationProgress?: VerificationProgress;
-  finalVerification?: { passed: boolean; details: unknown; checkedAt: string; head?: string; tree?: string };
+  finalVerification?: { passed: boolean; details: unknown; checkedAt: string; head?: string };
   /** Repair tasks added after a failed final verification; bounded by execution.maxFinalRepairs. */
-  finalRepairs?: Array<{ at: string; taskId: string; verification: { passed: boolean; details: unknown } }>;
+  finalRepairs?: Array<{ at: string; taskId: string; verification: { passed: boolean; details: unknown }; /** The failure did not reproduce and nothing was changed: the task was removed again. */ withdrawn?: boolean }>;
   tasks: Record<string, TaskState>;
 }
 

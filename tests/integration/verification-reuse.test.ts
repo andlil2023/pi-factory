@@ -31,7 +31,7 @@ async function fixture(t: import('node:test').TestContext, reuseVerification: bo
   state.git!.expectedHead = checkpoint.commit;
   state.tasks.T001 = { id: 'T001', status: 'completed', checkpointCommit: checkpoint.commit, attempts: [{ number: 1, startedAt: new Date().toISOString(), checkpointCommit: checkpoint.commit }] };
   state.status = 'completed';
-  state.finalVerification = { passed: true, details: {}, checkedAt: new Date().toISOString(), tree: git(info.path, 'rev-parse', 'HEAD^{tree}') };
+  state.finalVerification = { passed: true, details: {}, checkedAt: new Date().toISOString() };
   await store.save(state);
   let verified = 0, setups = 0;
   const options: IntegrationOptions = {
@@ -47,50 +47,36 @@ async function fixture(t: import('node:test').TestContext, reuseVerification: bo
   return { repository, info, store, state, options, counts: () => ({ verified, setups }) };
 }
 
-test('an unchanged target reuses final verification for preparation and publication; review still runs', async t => {
+test('preparation always verifies in its fresh worktree; publication reuses that result for the same tree', async t => {
   const { repository, store, state, options, counts } = await fixture(t, true);
   const record = await prepareIntegration(store, state, options);
   assert.equal(record.status, 'ready', record.error);
-  assert.deepEqual(counts(), { verified: 0, setups: 0 });
-  assert.equal(record.reviews?.length, 1, 'reuse never skips review');
-  const details = record.verification!.details as { reused: { from: string; tree: string } };
-  assert.equal(details.reused.from, 'final verification');
-  assert.equal(details.reused.tree, state.finalVerification!.tree);
-  assert.equal(record.verifiedTree, state.finalVerification!.tree);
+  // The run worktree's ignored files are not described by a Git tree, so the clean-checkout verification is never skipped.
+  assert.deepEqual(counts(), { verified: 1, setups: 1 });
+  assert.equal((record.verification!.details as { reused?: unknown }).reused, undefined);
+  assert.equal(record.verifiedTree, git(record.worktree, 'rev-parse', 'HEAD^{tree}'));
+  assert.equal(record.reviews?.length, 1);
   const published = await publishIntegration(store, state, options, record.commit!);
   assert.equal(published.status, 'published', published.error);
-  assert.equal(counts().verified, 0);
-  assert.equal((published.publicationVerification!.details as { reused: { from: string } }).reused.from, 'integration verification');
+  assert.equal(counts().verified, 1, 'publication does not run the commands again on the tree preparation verified');
+  const details = published.publicationVerification!.details as { reused: { from: string; tree: string } };
+  assert.deepEqual([details.reused.from, details.reused.tree], ['integration verification', record.verifiedTree]);
   assert.equal(await readFile(join(repository, 'factory.txt'), 'utf8'), 'factory change\n');
 });
 
-test('content added on the target forces real verification of the merged candidate', async t => {
-  const { repository, store, state, options, counts } = await fixture(t, true);
-  await writeFile(join(repository, 'target.txt'), 'target advanced\n');
-  git(repository, 'add', '.'); git(repository, 'commit', '-m', 'target change');
-  const record = await prepareIntegration(store, state, options);
-  assert.equal(record.status, 'ready', record.error);
-  assert.deepEqual(counts(), { verified: 1, setups: 1 });
-  assert.notEqual(record.verifiedTree, state.finalVerification!.tree);
-  // Publication covers the tree that preparation verified, so that result is reused.
-  const published = await publishIntegration(store, state, options, record.commit!);
-  assert.equal(published.status, 'published', published.error);
-  assert.equal(counts().verified, 1);
-});
-
-test('reuse is off unless enabled, and needs a recorded passing tree', async t => {
+test('publication verifies again when reuse is off or no verified tree was recorded', async t => {
   const disabled = await fixture(t, false);
   const first = await prepareIntegration(disabled.store, disabled.state, disabled.options);
   assert.equal(first.status, 'ready', first.error);
-  assert.equal(disabled.counts().verified, 1);
   await publishIntegration(disabled.store, disabled.state, disabled.options, first.commit!);
   assert.equal(disabled.counts().verified, 2);
 
   const legacy = await fixture(t, true);
-  delete legacy.state.finalVerification!.tree;
+  const prepared = await prepareIntegration(legacy.store, legacy.state, legacy.options);
+  delete prepared.verifiedTree;
   await legacy.store.save(legacy.state);
-  await prepareIntegration(legacy.store, legacy.state, legacy.options);
-  assert.equal(legacy.counts().verified, 1, 'a run without a recorded tree is verified');
+  await publishIntegration(legacy.store, legacy.state, legacy.options, prepared.commit!);
+  assert.equal(legacy.counts().verified, 2, 'a candidate prepared before trees were recorded is verified at publication');
 });
 
 test('the full-verification flag overrides task selection and the implementer learns its time limit', async t => {

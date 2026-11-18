@@ -132,15 +132,15 @@ An agent session is terminated at its `timeoutMs`. After an implementer timeout 
 
 Running every trusted command again on content that already passed them proves nothing new. With `execution.reuseVerification` (default `true`):
 
-- **Final verification** reuses the last task's verification when that verification ran every trusted command (mode `full`), passed, and its checkpoint is the head of the run. A checkpoint commits exactly the tree its verification ran on.
-- **Integration preparation** reuses final verification when the merge candidate has the same Git tree as the tree final verification passed, which is the case when the target branch added no content since the run started. Any difference runs every command on the candidate.
-- **Publication** reuses the preparation result for the same candidate tree.
+- **Final verification** reuses the last task's verification when that verification ran every trusted command (mode `full`), passed on its first run (not recorded as flaky), and its checkpoint is the head of the run. A checkpoint commits exactly the tree its verification ran on, in the same worktree.
+- **Publication** reuses the preparation result when the candidate worktree is clean at the prepared commit and has the Git tree that preparation verified.
+- **Integration preparation is never reused.** It is the only verification in a fresh checkout with freshly set-up dependencies; results from the run worktree depend on ignored files that a Git tree does not describe.
 
-A reused result is recorded as `details.reused` with its source and tree; it is never silent. Review is never reused or skipped. Identity is by Git tree only: ignored files such as installed dependencies are assumed to be reproduced by the configured `setup`. Set `execution.reuseVerification` to `false` to run every gate every time.
+A reused result is recorded as `details.reused` with its source; it is never silent. Review is never reused or skipped. Set `execution.reuseVerification` to `false` to run every gate every time.
 
 ### Repairing a failed final verification
 
-With task-level selection, a defect in a check that no task selected first shows up at final verification. Instead of blocking at once, the orchestrator adds a repair task, up to `execution.maxFinalRepairs` times per run (default 2, `0` blocks at once). The repair task receives the failed checks as structured feedback, is always verified with every trusted command, is reviewed like any other task, and has the normal repair budget. It is recorded in `finalRepairs`, in the plan (the previous plan moves to `planRevisions`), and as a `PLAN_REVISED` event. It is never replanned automatically. When the budget is spent, or the repair task itself blocks, the run stops for you as before.
+With task-level selection, a defect in a check that no task selected first shows up at final verification. Instead of blocking at once, the orchestrator adds a repair task, up to `execution.maxFinalRepairs` times per run (default 2, `0` blocks at once). The repair task receives the failed checks as structured feedback, is always verified with every trusted command, is reviewed like any other task, and has the normal repair budget. It is recorded in `finalRepairs`, in the plan (the previous plan moves to `planRevisions`), and as a `PLAN_REVISED` event. It is never replanned automatically. When the budget is spent, or the repair task itself blocks, the run stops for you as before. If every trusted command passes for the repair task and nothing was changed, the failure did not reproduce: the task is withdrawn (its history moves to `supersededTasks`, `finalRepairs[].withdrawn` is set) and final verification runs again.
 
 ## Opt-in task verification selection
 
