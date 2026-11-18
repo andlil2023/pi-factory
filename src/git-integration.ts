@@ -28,7 +28,7 @@ export interface IntegrationOptions {
   /** Publication accepts the preparation's passing verification of the identical Git tree instead of rerunning the commands. */
   reuseVerification?: boolean;
   /** Dependency injection for independently tested GitHub transport. */
-  github?: Pick<typeof github, 'githubDestination' | 'remoteHead' | 'pushCandidate' | 'createPullRequest' | 'verifyPullRequest'>;
+  github?: Pick<typeof github, 'githubDestination' | 'remoteHead' | 'pushCandidate' | 'createPullRequest' | 'verifyPullRequest' | 'readPullRequest'>;
 }
 
 function eligible(state: FactoryRunState, options: IntegrationOptions): void {

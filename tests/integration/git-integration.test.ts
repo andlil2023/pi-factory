@@ -128,7 +128,8 @@ test('GitHub publication pushes the reviewed candidate and records an open PR, n
     remoteHead: async (_cwd, _remote, branch) => branch === record.targetBranch ? record.targetHead : pushed ? record.commit : undefined,
     pushCandidate: async (_cwd, d) => { assert.equal(d.headSha, record.commit); pushed = true; },
     createPullRequest: async (_cwd, d) => { assert.equal(d.baseSha, record.targetHead); return 'https://github.com/owner/repo/pull/1'; },
-    verifyPullRequest: async () => {}
+    verifyPullRequest: async () => {},
+    readPullRequest: async () => { assert.fail('must not read PR'); }
   };
   const result = await publishPullRequest(store, state, options, record.commit!);
   assert.equal(result.status, 'pr-opened');
@@ -147,7 +148,8 @@ test('GitHub publication fails closed on a moved base or an ambiguous push', asy
     remoteHead: async (_cwd, _remote, branch) => branch === record.targetBranch ? (moved ? 'other' : record.targetHead) : undefined,
     pushCandidate: async () => { throw new Error('ambiguous timeout'); },
     createPullRequest: async () => { assert.fail('must not create PR'); },
-    verifyPullRequest: async () => { assert.fail('must not verify PR'); }
+    verifyPullRequest: async () => { assert.fail('must not verify PR'); },
+    readPullRequest: async () => { assert.fail('must not read PR'); }
   };
   await assert.rejects(publishPullRequest(store, state, options, record.commit!), /base differs/);
   assert.equal(record.status, 'ready');
@@ -167,7 +169,8 @@ test('a PR that becomes stale during creation stays in manual reconciliation', a
     remoteHead: async (_cwd, _remote, branch) => branch === record.targetBranch ? (created ? 'moved' : record.targetHead) : pushed ? record.commit : undefined,
     pushCandidate: async () => { pushed = true; },
     createPullRequest: async () => { created = true; return 'https://github.com/owner/repo/pull/2'; },
-    verifyPullRequest: async () => {}
+    verifyPullRequest: async () => {},
+    readPullRequest: async () => { assert.fail('must not read PR'); }
   };
   await assert.rejects(publishPullRequest(store, state, options, record.commit!), /manual reconciliation/);
   assert.equal(record.status, 'pr-publishing');
