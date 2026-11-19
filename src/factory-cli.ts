@@ -29,10 +29,12 @@ import { diagnoseRuns } from './doctor-runs.ts';
 import { addIntegrationRepair, integrationRepairEligible } from './integration-repair.ts';
 import { initialize } from './init.ts';
 import { createDashboardServer } from './dashboard-server.ts';
+import { validateSpecificationsConfig, type SpecificationsConfig } from './spec-config.ts';
 
 interface Config {
-  /** `planReviewer` defaults to `reviewer`. */
-  agents: { planner: AgentModel; implementer: AgentModel; reviewer: AgentModel; planReviewer?: AgentModel };
+  /** Optional specification agents fall back to planner and planReviewer/reviewer respectively. */
+  agents: { planner: AgentModel; implementer: AgentModel; reviewer: AgentModel; planReviewer?: AgentModel; impactAnalyst?: AgentModel; specReviewer?: AgentModel };
+  specifications?: SpecificationsConfig;
   /** Reviews of a new or revised plan before it is saved; 0 disables plan review. Default 2. */
   planning?: { maxReviewRounds?: number };
   reviewers?: SpecialistReviewers;
@@ -111,8 +113,11 @@ async function configFrom(flags:Record<string,string|boolean>):Promise<Config> {
   if (config.execution?.reuseVerification !== undefined && typeof config.execution.reuseVerification !== 'boolean') throw new Error('Invalid execution.reuseVerification; use true or false');
   const maxReviewRounds = config.planning?.maxReviewRounds ?? 2;
   if (!Number.isSafeInteger(maxReviewRounds) || maxReviewRounds < 0 || maxReviewRounds > 5) throw new Error('Invalid planning.maxReviewRounds; use 0-5');
-  const planReviewer = config.agents.planReviewer;
-  if (planReviewer !== undefined && (!planReviewer || typeof planReviewer.provider !== 'string' || !planReviewer.provider.trim() || typeof planReviewer.model !== 'string' || !planReviewer.model.trim())) throw new Error('agents.planReviewer requires provider and model');
+  for (const key of ['planReviewer', 'impactAnalyst', 'specReviewer'] as const) {
+    const agent = config.agents[key];
+    if (agent !== undefined && (!agent || typeof agent.provider !== 'string' || !agent.provider.trim() || typeof agent.model !== 'string' || !agent.model.trim())) throw new Error(`agents.${key} requires provider and model`);
+  }
+  validateSpecificationsConfig(config.specifications);
   if (config.uiEvidence !== undefined) {
     if (!config.uiEvidence || !config.reviewers?.ui) throw new Error('uiEvidence requires an enabled UI reviewer');
     validateUiEvidenceCommand(config.uiEvidence.command);
