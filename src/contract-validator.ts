@@ -3,9 +3,9 @@ const Ajv2020 = Ajv2020Module.default;
 
 import type { ErrorObject, ValidateFunction } from "ajv";
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { posix, resolve, win32 } from "node:path";
 
-export type ContractName = "plan" | "plan-review" | "implementation" | "review" | "ui-evidence";
+export type ContractName = "plan" | "plan-review" | "implementation" | "review" | "ui-evidence" | "impact" | "spec-review";
 export type ValidationIssue = {
   stage: "json" | "schema" | "semantic";
   path: string;
@@ -21,6 +21,8 @@ const CONTRACTS: Record<ContractName, string> = {
   implementation: "implementation.schema.json",
   review: "review.schema.json",
   "ui-evidence": "ui-evidence.schema.json",
+  impact: "impact.schema.json",
+  "spec-review": "spec-review.schema.json",
 };
 
 /** Task size gate for new and amended plans: one task must fit one implementer session. */
@@ -92,6 +94,14 @@ type Decision = { affectedTasks: string[] };
 type Plan = { tasks: Task[]; decisions: Decision[] };
 type Implementation = { taskId: string; outcome: string; blockers: { kind: string; question?: string; proposedSplit?: string[] }[] };
 type Review = { taskId: string; reviewer: string; verdict: string; findings: { severity: string }[]; limitations: string[] };
+type Impact = { affectedModules: { path: string; change: string }[]; consequences: string[] };
+
+// Permit an optional final sentence terminator, but not a second sentence or line.
+function isSingleSentence(text: string): boolean {
+  const trimmed = text.trim();
+  return trimmed.length > 0 && !/[\r\n\u0085\u2028\u2029]/u.test(text)
+    && !/[.!?]+["'”’»\])}]*\s+\S/u.test(trimmed);
+}
 
 function validateSemantics(
   contract: ContractName,
@@ -140,6 +150,18 @@ function validateSemantics(
         }
       }
     }
+  } else if (contract === "impact") {
+    const impact = value as Impact;
+    for (const [index, module] of impact.affectedModules.entries()) {
+      const path = module.path;
+      if (!path.trim() || posix.isAbsolute(path) || win32.isAbsolute(path) || /^[a-z]:/i.test(path) || path.split(/[\\/]/).includes("..")) {
+        add(`/affectedModules/${index}/path`, "Path must be repository-relative and must not contain a .. segment");
+      }
+      if (!isSingleSentence(module.change)) add(`/affectedModules/${index}/change`, "Change must be single-line, one-sentence text");
+    }
+    for (const [index, consequence] of impact.consequences.entries()) {
+      if (!isSingleSentence(consequence)) add(`/consequences/${index}`, "Consequence must be single-line, one-sentence text");
+    }
   } else if (contract === "implementation") {
     const report = value as Implementation;
     for (const [index, blocker] of report.blockers.entries()) {
@@ -156,7 +178,7 @@ function validateSemantics(
     if (report.verdict === "blocked" && report.limitations.length === 0) add("/limitations", "Blocked review must explain its limitation");
   }
 
-  if (contract !== "plan" && contract !== "plan-review") {
+  if (contract === "implementation" || contract === "review" || contract === "ui-evidence") {
     const report = value as Implementation | Review;
     if (options.expectedTaskId && report.taskId !== options.expectedTaskId) add("/taskId", "Report task ID does not match assigned task");
   }

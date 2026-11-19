@@ -14,7 +14,7 @@ test('entry point initializes and runs workflows using its own assets outside th
     // A separate package tree ensures neither templates nor agent assets can be found via cwd.
     const pkg = join(temp, 'package');
     await mkdir(pkg);
-    for (const item of ['bin', 'src', 'agents', 'contracts', 'examples', 'factory.config.example.json', 'package.json']) {
+    for (const item of ['bin', 'src', 'agents', 'contracts', 'examples', 'templates', 'factory.config.example.json', 'package.json']) {
       await cp(join(root, item), join(pkg, item), { recursive: true });
     }
     await symlink(join(root, 'node_modules'), join(pkg, 'node_modules'), 'junction');
@@ -24,17 +24,23 @@ test('entry point initializes and runs workflows using its own assets outside th
     await mkdir(target);
     const cli = (...args: string[]) => spawnSync(process.execPath, [join(pkg, 'bin', 'pi-factory.js'), ...args], { cwd, encoding: 'utf8' });
     assert.notEqual(cli('init').status, 0);
-    assert.equal(cli('init', '--repo', target).status, 0);
+    const initialized = cli('init', '--repo', target);
+    assert.equal(initialized.status, 0, initialized.stderr);
     const configPath = join(target, '.factory', 'config.json');
     const objectivePath = join(target, '.factory', 'objective.md');
+    const templatePath = join(target, '.factory', 'specification-template.md');
+    assert.equal(await readFile(templatePath, 'utf8'), await readFile(join(pkg, 'templates', 'specification.md'), 'utf8'));
     assert.equal(await readFile(configPath, 'utf8'), await readFile(join(pkg, 'factory.config.example.json'), 'utf8'));
     assert.equal(await readFile(objectivePath, 'utf8'), await readFile(join(pkg, 'examples', 'objective.md'), 'utf8'));
     await writeFile(configPath, 'custom config');
     await writeFile(objectivePath, 'custom objective');
+    await writeFile(templatePath, 'custom template');
     assert.equal(cli('init', '--repo', target).status, 0);
+    assert.equal(await readFile(templatePath, 'utf8'), 'custom template');
     assert.equal(await readFile(configPath, 'utf8'), 'custom config');
     assert.equal(await readFile(objectivePath, 'utf8'), 'custom objective');
     assert.equal(cli('init', '--repo', target, '--force').status, 0);
+    assert.equal(await readFile(templatePath, 'utf8'), await readFile(join(pkg, 'templates', 'specification.md'), 'utf8'));
     assert.equal(await readFile(configPath, 'utf8'), await readFile(join(pkg, 'factory.config.example.json'), 'utf8'));
     assert.equal(await readFile(objectivePath, 'utf8'), await readFile(join(pkg, 'examples', 'objective.md'), 'utf8'));
 
@@ -52,6 +58,16 @@ test('entry point initializes and runs workflows using its own assets outside th
       assert.notEqual(rejected.status, 0);
       assert.match(rejected.stderr, /requires --approve/i);
     }
+    const noVerification = join(temp, 'no-verification.json');
+    await writeFile(noVerification, JSON.stringify({ agents: { planner: { provider: 'test', model: 'test' }, implementer: { provider: 'test', model: 'test' }, reviewer: { provider: 'test', model: 'test' } } }));
+    const unconfigured = cli('run', '--repo', target, '--config', noVerification, '--plan', output, '--approve');
+    assert.notEqual(unconfigured.status, 0);
+    assert.match(unconfigured.stderr, /at least one trusted verification command/i);
+    const blocking = join(temp, 'blocking.json');
+    await writeFile(blocking, JSON.stringify({ ...plan, decisions: [{ id: 'D001', question: 'Resolve?', blocking: true, affectedTasks: ['T001'] }] }));
+    const unresolved = cli('run', '--repo', target, '--config', config, '--plan', blocking, '--approve');
+    assert.notEqual(unresolved.status, 0);
+    assert.match(unresolved.stderr, /unresolved blocking decisions/i);
     const invalidTarget = cli('run', '--repo', target, '--config', config, '--plan', output, '--approve');
     assert.notEqual(invalidTarget.status, 0);
     assert.match(invalidTarget.stderr, /git rev-parse failed/i);

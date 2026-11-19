@@ -13,6 +13,7 @@
       "model": "REPLACE_WITH_PI_MODEL_ID"
     }
   },
+  "specifications": { "store": "local" },
   "reviewRouting": "task-specific",
   "reviewers": {
     "security": {
