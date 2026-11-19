@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["affectedModules", "consequences"],
+  "properties": {
+    "affectedModules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "change"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "change": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "consequences": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}

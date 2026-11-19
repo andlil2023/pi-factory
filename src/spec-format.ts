@@ -51,6 +51,57 @@ function scan(text: string): ScanResult {
   return { titles, sections };
 }
 
+// Replace section bodies without normalizing or reserializing the rest of the draft.
+export function replaceSection(text: string, name: string, body: string): string {
+  const newline = text.includes('\r\n') ? '\r\n' : '\n';
+  const normalizedBody = body.replace(/\r\n|\r|\n/g, newline);
+  const lines = text.match(/[^\n]*\n|[^\n]+$/g) ?? [];
+  const sections: Array<{ start: number; end: number; headingEnd: number; heading: string }> = [];
+  let offset = 0;
+  let fence: { character: string; length: number } | undefined;
+  for (const raw of lines) {
+    const line = raw.replace(/\r?\n$/, '');
+    const marker = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+    if (fence) {
+      if (marker && marker[1][0] === fence.character && marker[1].length >= fence.length && /^\s*$/.test(marker[2])) fence = undefined;
+    } else if (marker) {
+      fence = { character: marker[1][0], length: marker[1].length };
+    } else {
+      const heading = line.match(/^##(?:[ \t]+(.*)|[ \t]*)$/);
+      if (heading) {
+        if (sections.length) sections[sections.length - 1].end = offset;
+        sections.push({ start: offset, end: text.length, headingEnd: offset + raw.length, heading: (heading[1] ?? '').trim() });
+      }
+    }
+    offset += raw.length;
+  }
+  const matches = sections.filter(section => section.heading.toLowerCase() === name.toLowerCase());
+  if (!matches.length) {
+    if (fence) {
+      // Appending would put the new heading inside the unterminated fence.
+      // Insert before its containing section so that section remains untouched.
+      const insertion = sections.at(-1)?.start ?? 0;
+      return `${text.slice(0, insertion)}## ${name}${newline}${normalizedBody}${newline}${newline}${text.slice(insertion)}`;
+    }
+    const separator = !text ? '' : text.endsWith(newline + newline) ? '' : text.endsWith(newline) ? newline : newline + newline;
+    return `${text}${separator}## ${name}${newline}${normalizedBody}${newline}`;
+  }
+  let result = text;
+  for (let i = matches.length - 1; i >= 0; i--) {
+    const section = matches[i];
+    if (i > 0) {
+      result = result.slice(0, section.start) + result.slice(section.end);
+      continue;
+    }
+    const oldBody = text.slice(section.headingEnd, section.end);
+    const trailing = oldBody.match(/(?:\r?\n)+$/)?.[0] ?? (section.end < text.length ? newline : '');
+    const heading = text.slice(section.start, section.headingEnd);
+    const headingSeparator = heading.endsWith('\n') ? '' : newline;
+    result = result.slice(0, section.start) + heading + headingSeparator + normalizedBody + trailing + result.slice(section.end);
+  }
+  return result;
+}
+
 export function parseSpecification(text: string): ParsedSpecification {
   const parsed = scan(text);
   return {
