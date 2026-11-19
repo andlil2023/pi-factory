@@ -44,7 +44,7 @@ interface Config {
   planning?: { maxReviewRounds?: number };
   reviewers?: SpecialistReviewers;
   reviewRouting?: ReviewRouting;
-  uiEvidence?: { command: UiEvidenceCommand };
+  uiEvidence?: { command: UiEvidenceCommand; syntheticDeveloperReviewAuthorized?: boolean };
   /** `maxAutoReplans`: plan revisions the factory may apply without an operator per run; 0 always stops. Default 2.
    * `maxFinalRepairs`: repair tasks added after a failed final verification; 0 blocks at once. Default 2.
    * `maxIntegrationRepairs`: repair tasks added after a blocked integration; 0 disables repairs. Default 2.
@@ -126,6 +126,7 @@ async function configFrom(flags:Record<string,string|boolean>, options:{doctor?:
   if (config.uiEvidence !== undefined) {
     if (!config.uiEvidence || !config.reviewers?.ui) throw new Error('uiEvidence requires an enabled UI reviewer');
     validateUiEvidenceCommand(config.uiEvidence.command);
+    if (config.uiEvidence.syntheticDeveloperReviewAuthorized !== undefined && typeof config.uiEvidence.syntheticDeveloperReviewAuthorized !== 'boolean') throw new Error('Invalid uiEvidence.syntheticDeveloperReviewAuthorized');
   }
   if (config.reviewRouting !== undefined && config.reviewRouting !== 'all' && config.reviewRouting !== 'task-specific') throw new Error('Invalid reviewRouting; use all or task-specific');
   if (!options.doctor && config.verification !== undefined) validateVerificationCommands(config.verification);
@@ -526,7 +527,7 @@ async function executeRun(store:StateStore,state:FactoryRunState,config:Config):
     verification:config.verification!,verificationSelection:config.verificationSelection,baselineCommit:git.expectedHead,
     verificationContext:()=>({plan:state.plan,specification:state.specification?.sha256??null}),
     verificationReruns:config.execution?.verificationReruns??1,logDirectory:join(store.directory,runId,'logs'),
-    uiEvidence:config.uiEvidence ? { command:config.uiEvidence.command, directory:join(store.directory,runId,'ui-evidence') } : undefined};
+    uiEvidence:config.uiEvidence ? { ...config.uiEvidence, directory:join(store.directory,runId,'ui-evidence') } : undefined};
   const adapters=createAgentAdapters(adapterConfig);
   console.log(`Run ${runId}; worktree: ${worktree.path}`);
   // Git checkpoints create a fresh baseline for subsequent tasks.
@@ -653,7 +654,7 @@ async function integrateCommand(flags:Record<string,string|boolean>):Promise<voi
           verification:config.verification!,baselineCommit:baseline,
           verificationContext:()=>({plan:state.plan,specification:state.specification?.sha256??null}),
           verificationReruns:config.execution?.verificationReruns??1,logDirectory:join(store.directory,runId,'integration-logs',String(attempt)),
-          uiEvidence:config.uiEvidence?{command:config.uiEvidence.command,directory:join(store.directory,runId,'integration-evidence',String(attempt))}:undefined})
+          uiEvidence:config.uiEvidence?{...config.uiEvidence,directory:join(store.directory,runId,'integration-evidence',String(attempt))}:undefined})
       };
       let record=flags.publish===true
         ? await (await hasGitRemote(repository) ? publishPullRequest : publishIntegration)(store,state,options,required(flags,'candidate'))

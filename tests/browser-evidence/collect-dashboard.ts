@@ -103,6 +103,12 @@ export async function withOwnedResources(resources: OwnedResources, startup: (si
   }
 }
 
+// A legacy host rejects unknown manifest properties. This capability is independent
+// of permission to display synthetic images, which only the host can grant.
+export function dashboardImageLinks(capability: string | undefined) {
+  return capability === '1' ? { imageLinks: [{ checkName: 'Keyboard selection, disclosure, refresh and focus restoration; persisted task, check and phase', screenshotPath: 'dashboard-1440.png', caption: 'Synthetic dashboard after keyboard interaction' }] } : {};
+}
+
 async function run(): Promise<void> {
   const output = process.env.FACTORY_UI_EVIDENCE_DIRECTORY;
   const taskId = process.env.FACTORY_TASK_ID, attempt = Number(process.env.FACTORY_ATTEMPT), fingerprint = process.env.FACTORY_SOURCE_FINGERPRINT;
@@ -224,7 +230,7 @@ async function run(): Promise<void> {
     }
     collectedArtifacts = artifacts;
   });
-  await bounded(writeFile(join(output, 'manifest.json'), JSON.stringify({ version: 1, taskId, attempt, capturedAt: new Date().toISOString(), sourceFingerprint: fingerprint, application: { framework: 'dashboard HTML/JavaScript', buildId: fingerprint }, checks: [{ kind: 'interaction', name: 'Keyboard selection, disclosure, refresh and focus restoration; persisted task, check and phase', status: 'passed' }, { kind: 'accessibility', name: 'Named controls and no document overflow at 1440, 768 and 390 pixels', status: 'passed' }], artifacts: collectedArtifacts, limitations: ['Synthetic persisted run and selected keyboard interactions only; viewport and named-control checks are not a complete accessibility audit or certification.'] }, null, 2), { signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())) }), Math.max(1, deadline - Date.now()), 'Manifest write');
+  await bounded(writeFile(join(output, 'manifest.json'), JSON.stringify({ version: 1, taskId, attempt, capturedAt: new Date().toISOString(), sourceFingerprint: fingerprint, application: { framework: 'dashboard HTML/JavaScript', buildId: fingerprint }, checks: [{ kind: 'interaction', name: 'Keyboard selection, disclosure, refresh and focus restoration; persisted task, check and phase', status: 'passed' }, { kind: 'accessibility', name: 'Named controls and no document overflow at 1440, 768 and 390 pixels', status: 'passed' }], artifacts: collectedArtifacts, ...dashboardImageLinks(process.env.FACTORY_UI_EVIDENCE_IMAGE_LINKS), limitations: ['Synthetic persisted run and selected keyboard interactions only; viewport and named-control checks are not a complete accessibility audit or certification.'] }, null, 2), { signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())) }), Math.max(1, deadline - Date.now()), 'Manifest write');
 }
 
 export function failCommand(): never {
