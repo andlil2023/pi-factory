@@ -4,6 +4,46 @@ PI Factory orchestrates planning, implementation, verification and independent r
 
 Start with the [Windows installed-tool quick-start](docs/operator-quick-start.md) for prerequisites, tag installation, configuration, planning, approval, execution, optional skills and upgrades. The CLI works without skills; Pi remains the factory's separate agent runtime.
 
+## Specifications
+
+A specification is an operator-owned description of the outcome, not an implementation plan. Start from [`templates/specification.md`](templates/specification.md): give it a title and sections for **What**, **Why**, **Acceptance criteria** (prefer Given/When/Then), **Out of scope**, **Threat model**, **Open questions**, and **Impact analysis**. Write in plain English, avoid secrets, and resolve decisions rather than inventing answers. The template ideas are credited to the [Elephant-Goldfish Model](https://github.com/google/elephant-goldfish-model), licensed under Apache-2.0.
+
+Prepare a draft file and use your target's configuration (substitute paths throughout):
+
+```powershell
+pi-factory spec check --spec DRAFT.md
+pi-factory spec review --repo PATH --config CONFIG_FILE --spec DRAFT.md
+pi-factory spec impact --repo PATH --config CONFIG_FILE --spec DRAFT.md
+# Inspect the whole specification and explicitly approve publication
+pi-factory spec publish --repo PATH --config CONFIG_FILE --spec DRAFT.md --approve
+# Use the ID printed by publish, e.g. .factory/specs/title.md for local storage
+pi-factory start --repo PATH --config CONFIG_FILE --spec SPEC_ID --approve
+```
+
+`check` validates the draft, including unresolved open questions. `review` produces advisory findings and questions to consider; it is not a publication approval or a substitute for validation. Address findings with the operator and check again as needed. `impact` writes an initial estimate of likely affected areas and consequences into the draft; it is **nonbinding**, not a requirement or an implementation limit. `publish` validates and saves the specification with explicit approval; it warns about unresolved questions or missing impact analysis rather than rejecting those alone. Resolve open questions before `start`, which validates again.
+
+The optional top-level `specifications` block selects the store. For example, merge this into your existing configuration (project owner and number are required for GitHub):
+
+```json
+"specifications": {
+  "store": "github",
+  "local": { "directory": ".factory/specs" },
+  "github": {
+    "repository": "OWNER/REPO",
+    "label": "factory-spec",
+    "project": { "owner": "OWNER", "number": 1, "iterationField": "Iteration" }
+  }
+}
+```
+
+If omitted, `store` defaults to `local` and the repository-relative local directory defaults to `.factory/specs`; local publication creates a title-derived Markdown file and does not overwrite an existing one. The directory must be repository-relative without `..` segments. For GitHub, `repository` defaults to the repository derived from the GitHub `origin` remote, `label` to `factory-spec`, and `iterationField` to `Iteration`. The optional `agents.impactAnalyst` defaults to `agents.planner`; `agents.specReviewer` defaults to `agents.planReviewer`, then `agents.reviewer`.
+
+For the GitHub store, install and authenticate `gh`, create the configured label in the repository before publication, and configure the Project's auto-add workflow to add issues filtered by that label. Grant Project read access with `gh auth refresh -s read:project`. Publication creates a labeled issue; ensure it has been added to the configured Project and assigned to a current iteration. To start, the issue must be open, carry the configured label, and be in that Project with the configured iteration field set to a current iteration (UTC dates).
+
+GitHub start is deliberately two-step: the first `start --approve` above fetches the issue and prints its title, URL, update time, SHA-256 and a next command without starting a run. Inspect the specification, then explicitly run the printed command with `--sha256 HASH --approve`; it refetches and refuses a hash mismatch. `--new-run` explicitly permits a fresh run when non-completed runs already exist for the same specification, rather than silently duplicating them; inspect those runs first.
+
+`start --approve` approves the **specification** and execution, not a manually reviewed plan. It creates and independently reviews a plan, saves the plan and review report, and stops instead of executing if the plan has blocking decisions or its final review is not approved and clean. Start requires trusted verification and enabled plan review. Integration and publication of the resulting code remain separate approvals. The existing manual path remains available: `pi-factory plan --repo PATH --config CONFIG_FILE --objective OBJECTIVE.md --output PLAN.json`, then inspect the plan and review report, resolve blocking decisions, and only with explicit approval run `pi-factory run --repo PATH --config CONFIG_FILE --plan PLAN.json --approve`. Planning alone does not authorize execution.
+
 ## Read-only dashboard
 
 The dashboard shows automatic plan revisions and highlights attempts that passed verification only on a rerun.
