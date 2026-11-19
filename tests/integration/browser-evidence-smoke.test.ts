@@ -23,7 +23,17 @@ test('real browser collector validates and leaves its owned resources closed', {
     await assertUiEvidenceCurrent(record, repository);
     assert.equal(record.artifacts.length, 6);
     assert.equal(record.syntheticDeveloperReviewAuthorized, true);
-    assert.deepEqual(record.manifest?.imageLinks, [{ checkName: 'Keyboard selection, disclosure, refresh and focus restoration; persisted task, check and phase', screenshotPath: 'dashboard-1440.png', caption: 'Synthetic dashboard after keyboard interaction' }]);
+    assert.deepEqual(record.manifest?.imageLinks, [{ checkName: 'Keyboard selection, disclosure, refresh and focus restoration; persisted task, check and phase', screenshotPath: 'dashboard-1440.png', caption: 'Synthetic populated report after keyboard interaction' }]);
+    assert.ok(record.manifest?.checks.some(check => check.name.includes('Current report summary') && check.status === 'passed'));
+    for (const artifact of record.artifacts.filter(a => a.kind === 'accessibility-tree')) {
+      const tree = JSON.parse(await readFile(artifact.path, 'utf8'));
+      const names = tree.nodes.map((node: { name?: { value?: string } }) => node.name?.value ?? '').join(' ');
+      assert.match(names, /read-only evidence report/);
+      assert.match(names, /not demonstrated/i);
+      assert.match(names, /Synthetic dashboard before report selection/);
+      assert.match(names, /Supporting run details/);
+      assert.doesNotMatch(names, /Synthetic process narrative must remain hidden/);
+    }
     assert.equal(record.artifacts.filter(a => a.imageType === 'image/png').length, 3);
     assert.match(record.artifacts[0].sha256, /^[a-f0-9]{64}$/);
   } finally { await rm(directory, { recursive: true, force: true }); }

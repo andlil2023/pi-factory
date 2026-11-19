@@ -43,6 +43,12 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); 
 .badge[data-tone="bad"] { background: #3d202c; color: #ff9cae; }
 .badge[data-tone="active"] { background: #2c2650; color: #c3b5ff; }
 .badge[data-tone="warn"] { background: #3b3020; color: #f5cf87; }
+.evidence-report { display: grid; gap: 8px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.report-summary { font-size: 16px; font-weight: 600; }
+.report-criterion { border: 1px solid var(--border); border-radius: 10px; padding: 16px; display: grid; gap: 6px; min-width: 0; }
+.report-criterion ul, .evidence-report ul { margin: 0; padding-left: 22px; }
+.report-image { margin: 8px 0; min-width: 0; color: var(--muted); font-size: 12px; }
+.report-image img { display: block; max-width: 100%; height: auto; border-radius: 6px; }
 .task-list { display: grid; gap: 10px; margin-top: 14px; }
 .task-card { border: 1px solid var(--border); border-radius: 10px; padding: 16px; background: #151c28; min-width: 0; }
 .task-heading { justify-content: space-between; align-items: start; }
