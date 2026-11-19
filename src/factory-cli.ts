@@ -151,6 +151,7 @@ async function doctorCommand(flags:Record<string,string|boolean>):Promise<void> 
   let config:Config | undefined;
   try { config=await configFrom(flags); } catch { blockers.push('Configuration: provide a readable, valid configuration with --config and check its required fields.'); }
   if (config) {
+    if (config.specifications?.store === 'github' && !await executableAvailable('gh')) blockers.push('GitHub CLI: install gh and add it to PATH for the GitHub specification store.');
     try {
       const launch=piLaunch(config);
       let available=await executableAvailable(launch.executable);
