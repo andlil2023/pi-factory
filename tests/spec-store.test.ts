@@ -58,8 +58,11 @@ test('custom directory, concurrent saves, and configured GitHub selection', asyn
     await writeFile(join(repo, 'outside.md'), '# Outside\n');
     assert.equal((await new LocalSpecificationStore(repo).fetch('outside.md')).title, 'Outside');
     assert.throws(() => new LocalSpecificationStore(repo, '../outside'), /specifications.local.directory/);
-    const github = await createSpecificationStore({ store: 'github', github: { repository: 'owner/repo', project: { owner: 'owner', number: 1 } } }, repo, async () => 'https://github.com/owner/repo/issues/1');
+    const github = await createSpecificationStore({ store: 'github', github: { repository: 'owner/repo', project: { owner: 'owner', number: 1 } } }, repo, async args => {
+      assert.deepEqual(args.slice(0, 2), ['api', 'graphql']);
+      return JSON.stringify({ data: { repository: { issue: { state: 'CLOSED' } } } });
+    });
     assert.equal(github.kind, 'github');
-    assert.deepEqual(await github.startable('1'), { ok: false, reason: 'GitHub specification startability is not implemented yet' });
+    assert.deepEqual(await github.startable('1'), { ok: false, reason: 'Issue is not open' });
   } finally { await rm(repo, { recursive: true, force: true }); }
 });

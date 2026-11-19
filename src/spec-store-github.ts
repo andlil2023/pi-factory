@@ -82,5 +82,75 @@ export class GitHubSpecificationStore implements SpecificationStore {
     }
     return { id, title: fields.title, url: fields.url, updatedAt: fields.updatedAt, text: `# ${fields.title}\n\n${fields.body}`.replace(/\r\n/g, '\n') };
   }
-  async startable(_id: string): Promise<Startable> { return { ok: false, reason: 'GitHub specification startability is not implemented yet' }; }
+  async startable(id: string): Promise<Startable> {
+    if (/[^0-9]/.test(id) || !/[1-9]/.test(id) || !Number.isSafeInteger(Number(id)) || Number(id) > 2147483647) throw new Error(`Invalid GitHub issue id: ${id}`);
+    const { repository, label, project, gh } = this.options;
+    const [owner, name] = repository.split('/');
+    const query = `query($owner: String!, $name: String!, $number: Int!, $field: String!) {
+  repository(owner: $owner, name: $name) {
+    issue(number: $number) {
+      state
+      labels(first: 100) { nodes { name } pageInfo { hasNextPage } }
+      projectItems(first: 100) {
+        nodes {
+          project { number owner { ... on User { login } ... on Organization { login } } }
+          fieldValueByName(name: $field) {
+            __typename
+            ... on ProjectV2ItemFieldIterationValue { title startDate duration }
+          }
+        }
+        pageInfo { hasNextPage }
+      }
+    }
+  }
+}`;
+    const response = await gh(['api', 'graphql', '-f', `query=${query}`, '-f', `owner=${owner}`, '-f', `name=${name}`, '-F', `number=${Number(id)}`, '-f', `field=${project.iterationField}`]);
+    const unexpected = (): never => { throw new Error('GitHub returned an unexpected response'); };
+    const object = (value: unknown): Record<string, unknown> => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return unexpected();
+      return value as Record<string, unknown>;
+    };
+    const connection = (value: unknown): unknown[] => {
+      const data = object(value);
+      if (!Array.isArray(data.nodes) || object(data.pageInfo).hasNextPage !== false) return unexpected();
+      return data.nodes;
+    };
+    let parsed: unknown;
+    try { parsed = JSON.parse(response); } catch { return unexpected(); }
+    const root = object(parsed);
+    if ('errors' in root) return unexpected();
+    const issue = object(object(object(root.data).repository).issue);
+    if (typeof issue.state !== 'string' || !['OPEN', 'CLOSED'].includes(issue.state)) return unexpected();
+    if (issue.state !== 'OPEN') return { ok: false, reason: 'Issue is not open' };
+    const labels = connection(issue.labels).map(node => {
+      const name = object(node).name;
+      if (typeof name !== 'string') return unexpected();
+      return name;
+    });
+    if (!labels.includes(label)) return { ok: false, reason: `Issue is missing label "${label}"` };
+    const items = connection(issue.projectItems);
+    let foundProject = false;
+    for (const node of items) {
+      const item = object(node);
+      const itemProject = object(item.project);
+      const login = object(itemProject.owner).login;
+      if (typeof login !== 'string' || !Number.isInteger(itemProject.number)) return unexpected();
+      if (login.toLowerCase() !== project.owner.toLowerCase() || itemProject.number !== project.number) continue;
+      foundProject = true;
+      if (item.fieldValueByName === null) continue;
+      const value = object(item.fieldValueByName);
+      if (typeof value.__typename !== 'string') return unexpected();
+      if (value.__typename !== 'ProjectV2ItemFieldIterationValue') continue;
+      if (typeof value.title !== 'string' || typeof value.startDate !== 'string' || typeof value.duration !== 'number' || !Number.isSafeInteger(value.duration) || value.duration <= 0) return unexpected();
+      const start = Date.parse(`${value.startDate}T00:00:00.000Z`);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(value.startDate) || !Number.isFinite(start) || new Date(start).toISOString().slice(0, 10) !== value.startDate) return unexpected();
+      const now = (this.options.today ?? (() => new Date()))();
+      const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+      if (!Number.isFinite(today)) return unexpected();
+      if (start <= today && today < start + value.duration * 86400000) return { ok: true };
+      return { ok: false, reason: `Iteration "${value.title}" is not current` };
+    }
+    if (!foundProject) return { ok: false, reason: `Issue is not in Project ${project.owner}/${project.number}` };
+    return { ok: false, reason: `Issue is missing iteration field "${project.iterationField}" value` };
+  }
 }

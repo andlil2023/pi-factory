@@ -41,7 +41,6 @@ test('builder applies configured settings and defaults; save passes body via std
   assert.equal(custom.options.project.iterationField, 'Sprint');
   await custom.save('Real', '```\n# example\n```\n# Real\n\nBody\n');
   assert.equal(calls[1].input, '```\n# example\n```\n\nBody');
-  assert.equal((await custom.startable('12')).ok, false);
 });
 
 test('only matching issue URLs are accepted; errors are concise and missing labels include guidance', async () => {
@@ -82,6 +81,63 @@ test('fetch rejects malformed issue responses', async () => {
     const missing = { ...valid }; delete missing[key];
     return [JSON.stringify(missing), JSON.stringify({ ...valid, [key]: null }), JSON.stringify({ ...valid, [key]: 123 })];
   })]) await assert.rejects(store.fetch('1'), /unexpected response/i);
+});
+
+test('startability checks issue state, label, project and UTC iteration boundaries in order', async () => {
+  const calls: string[][] = [];
+  let issue: any;
+  let date = '2025-02-10T23:59:59Z';
+  const store = new GitHubSpecificationStore({ repository: 'owner/repo', label: 'spec', project: { ...project, iterationField: 'Sprint' }, today: () => new Date(date), gh: async args => {
+    calls.push(args);
+    return JSON.stringify({ data: { repository: { issue } } });
+  } });
+  const connection = (nodes: unknown[]) => ({ nodes, pageInfo: { hasNextPage: false } });
+  const iteration = { __typename: 'ProjectV2ItemFieldIterationValue', title: 'Sprint 1', startDate: '2025-02-10', duration: 7 };
+  const item = { project: { number: 7, owner: { login: 'ORG' } }, fieldValueByName: iteration };
+  issue = { state: 'CLOSED' };
+  assert.match((await store.startable('42') as { reason: string }).reason, /not open/i);
+  issue = { state: 'OPEN', labels: connection([]) };
+  assert.match((await store.startable('42') as { reason: string }).reason, /label.*spec/i);
+  issue.labels = connection([{ name: 'spec' }]);
+  issue.projectItems = connection([{ ...item, project: { number: 8, owner: { login: 'org' } } }]);
+  assert.match((await store.startable('42') as { reason: string }).reason, /not in project/i);
+  issue.projectItems = connection([{ ...item, fieldValueByName: null }]);
+  assert.match((await store.startable('42') as { reason: string }).reason, /missing iteration.*Sprint/i);
+  issue.projectItems = connection([item]);
+  assert.deepEqual(await store.startable('42'), { ok: true });
+  date = '2025-02-16T23:59:59Z';
+  assert.deepEqual(await store.startable('42'), { ok: true });
+  for (date of ['2025-02-09T23:59:59Z', '2025-02-17T00:00:00Z']) {
+    assert.match((await store.startable('42') as { reason: string }).reason, /Sprint 1.*not current/i);
+  }
+  assert.equal(calls.length, 8);
+  assert.ok(calls.every(args => args[0] === 'api' && args[1] === 'graphql' && args.includes('number=42') && args.includes('field=Sprint')));
+  const query = calls[0].find(arg => arg.startsWith('query='));
+  assert.ok(query);
+  // ProjectV2Owner has no direct login field; both possible owner types need fragments.
+  assert.match(query, /project\s*\{\s*number\s+owner\s*\{\s*\.\.\.\s+on\s+User\s*\{\s*login\s*\}\s*\.\.\.\s+on\s+Organization\s*\{\s*login\s*\}\s*\}\s*\}/);
+});
+
+test('startability rejects malformed consumed GraphQL fields and truncated connections', async () => {
+  const connection = <T,>(nodes: T[]) => ({ nodes, pageInfo: { hasNextPage: false } });
+  const valid = { state: 'OPEN', labels: connection([{ name: 'spec' }]), projectItems: connection([{ project: { number: 7, owner: { login: 'org' } }, fieldValueByName: { __typename: 'ProjectV2ItemFieldIterationValue', title: 'Sprint', startDate: '2025-02-10', duration: 7 } }]) };
+  let response = '';
+  const store = new GitHubSpecificationStore({ repository: 'owner/repo', label: 'spec', project: { ...project, iterationField: 'Sprint' }, today: () => new Date('2025-02-10Z'), gh: async () => response });
+  const wrap = (issue: unknown) => JSON.stringify({ data: { repository: { issue } } });
+  const cases = [
+    'invalid', '{}', JSON.stringify({ errors: [] }), wrap(null), wrap({ ...valid, state: 1 }),
+    wrap({ ...valid, labels: null }), wrap({ ...valid, labels: connection([{}]) }),
+    wrap({ ...valid, labels: { nodes: [], pageInfo: { hasNextPage: true } } }),
+    wrap({ ...valid, projectItems: null }), wrap({ ...valid, projectItems: connection([{ project: {} }]) }),
+    ...['title', 'startDate', 'duration', '__typename'].map(key => {
+      const item = valid.projectItems.nodes[0];
+      const value: Record<string, unknown> = { ...item.fieldValueByName }; delete value[key];
+      return wrap({ ...valid, projectItems: connection([{ ...item, fieldValueByName: value }]) });
+    }),
+    ...['2025-02-30', 'bad'].map(startDate => wrap({ ...valid, projectItems: connection([{ ...valid.projectItems.nodes[0], fieldValueByName: { ...valid.projectItems.nodes[0].fieldValueByName, startDate } }]) })),
+    wrap({ ...valid, projectItems: connection([{ ...valid.projectItems.nodes[0], fieldValueByName: { ...valid.projectItems.nodes[0].fieldValueByName, duration: '7' } }]) }),
+  ];
+  for (response of cases) await assert.rejects(store.startable('42'), /unexpected response/i, response);
 });
 
 test('repository derives from origin using GitHub PR URL rules and errors name configuration', async () => {
