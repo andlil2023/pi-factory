@@ -24,6 +24,17 @@ Use factory-recorded verification outcomes and validated artifacts. Treat report
 
 Report generation and a read-only dashboard report viewer, using the existing approval and revision workflows. Queue scheduling, a dashboard specification editor, new merge controls and video playback are separate features.
 
+## Revision and image selection
+
+On read, compare the persisted plan/specification and implementation revisions with the selected run's current revisions. If either differs or cannot be established, do not display the report as current. Record an explicit association between a named check, its eligible screenshot and its plain-text caption. Never select an image based solely on artifact order or membership in the same run. Test mismatched revisions and unrelated screenshots.
+
+## Required production evidence producers (before consumers)
+
+- Assign a prerequisite task to the trusted verification runner: record the identity and result of a configured criterion-specific named check together with the observed implementation and reviewed plan/specification identities. Suite-level success does not imply any named observation. Test the real verification-to-persisted-report path for a non-UI criterion, including stale and unrelated observations.
+- Assign a prerequisite task to extend the collector manifest, collector output, factory validation, and persisted evidence record with explicit check-to-image links and captions. Record synthetic-collector authorization from trusted configuration at collection time, not from manifest or report assertions. Screenshot serving depends on this producer. Test collection through serving for the associated image, unrelated images, modified bytes and unauthorized collectors. Demo fixture changes alone cannot satisfy either producer task.
+
 ## Demonstration
+
+For this run the operator authorizes the repository's trusted synthetic-data browser collector (`tests/browser-evidence/collect-dashboard.ts`) in a separate configuration, not a change to default settings or approval gates. Extend its synthetic fixture and rendered assertions for the report as needed.
 
 Require a rendered browser demonstration of the dashboard showing a captioned inline screenshot beside its criterion and a visible criterion with no supporting check. Source inspection alone is insufficient. Also demonstrate a non-UI run with named check evidence. Confirm that the unsupported criterion is not marked demonstrated and that a modified screenshot is not served.
