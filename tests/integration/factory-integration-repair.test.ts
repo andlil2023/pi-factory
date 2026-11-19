@@ -47,7 +47,7 @@ for (const [mode, budget] of [['once', 1], ['once', 0], ['always', 1], ['incompl
       assert.equal(git('rev-list','--parents','-n','1',candidate.commit!).split(' ')[2],state.git!.expectedHead);
       assert.notEqual(state.git!.expectedHead,before.git!.expectedHead);
       const observation = (verification: {details:unknown} | undefined) => (verification!.details as {observations:NamedObservation[]}).observations;
-      const expected = (attempt: typeof candidate, plan: unknown) => [{name:'integration-check',passed:true,identity:{plan:planIdentity(plan),specification:'fixture-spec-hash',implementation:git('-C',attempt.worktree,'rev-parse','HEAD^{tree}')}}];
+      const expected = (attempt: typeof candidate, plan: unknown) => [{name:'integration-check',passed:true,identity:{plan:planIdentity(plan),specification:'fixture-spec-hash',implementation:git('-C',attempt.worktree,'rev-parse','HEAD^{tree}')},execution:{commandIndex:0,rerun:0}}];
       assert.deepEqual(observation(state.integrations![0].verification),expected(state.integrations![0],before.plan));
       assert.notEqual(planIdentity(state.plan),planIdentity(before.plan));
       assert.deepEqual(observation(candidate.verification),expected(candidate,state.plan));

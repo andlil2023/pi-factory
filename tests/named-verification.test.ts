@@ -49,7 +49,7 @@ test('a named check that changes its input cannot claim a revision', async () =>
     await writeFile(join(repo,'file'), 'base'); git('add','.'); git('commit','-m','base');
     const adapters = createAgentAdapters({repository:repo,factoryRoot:resolve('.'),implementer:{provider:'x',model:'x'},reviewer:{provider:'x',model:'x'},baselineCommit:'HEAD',verificationContext:()=>({plan,specification:null}),verification:[{name:'mutates',executable:process.execPath,args:['-e',"require('fs').writeFileSync('file','modified')"]}]});
     const result = await adapters.verify({task,attempt:1,previousFeedback:[],fullVerification:true});
-    assert.deepEqual((result.details as {observations:NamedObservation[]}).observations, [{name:'mutates',passed:true,identity:null}]);
+    assert.deepEqual((result.details as {observations:NamedObservation[]}).observations, [{name:'mutates',passed:true,identity:null,execution:{commandIndex:0,rerun:0}}]);
   } finally { await rm(repo,{recursive:true,force:true}); }
 });
 

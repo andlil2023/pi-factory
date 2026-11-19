@@ -1,13 +1,14 @@
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { once } from 'node:events';
-import { access, copyFile, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { access, copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir, homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createDashboardServer } from '../../src/dashboard-server.ts';
 import { planIdentity } from '../../src/verification-observations.ts';
 import { dashboardImplementationIdentity } from '../../src/dashboard-identity.ts';
+import { collectUiEvidence } from '../../src/ui-evidence.ts';
+import { ContractValidator } from '../../src/contract-validator.ts';
 
 const deadline = Date.now() + 120_000;
 const remaining = () => { const ms = deadline - Date.now(); if (ms <= 0) throw new Error('Collection deadline exceeded'); return Math.min(ms, 5000); };
@@ -108,8 +109,9 @@ export async function withOwnedResources(resources: OwnedResources, startup: (si
 
 // A legacy host rejects unknown manifest properties. This capability is independent
 // of permission to display synthetic images, which only the host can grant.
+export const dashboardCheckName = 'dashboard-ui';
 export function dashboardImageLinks(capability: string | undefined) {
-  return capability === '1' ? { imageLinks: [{ checkName: 'Keyboard selection, disclosure, refresh and focus restoration; persisted task, check and phase', screenshotPath: 'dashboard-1440.png', caption: 'Synthetic populated report after keyboard interaction' }] } : {};
+  return capability === '1' ? { imageLinks: [{ checkName: dashboardCheckName, screenshotPath: 'dashboard-1440.png', caption: 'Synthetic populated report after keyboard interaction' }] } : {};
 }
 
 async function run(): Promise<void> {
@@ -225,24 +227,25 @@ async function run(): Promise<void> {
     const worktree = join(temp, 'worktree'); await mkdir(worktree);
     execFileSync('git', ['init', '-q'], { cwd: worktree });
     execFileSync('git', ['-c', 'user.name=Evidence', '-c', 'user.email=evidence@example.invalid', 'commit', '-q', '--allow-empty', '-m', 'Synthetic'], { cwd: worktree });
-    const imageDir = join(temp, 'synthetic-evidence'); await mkdir(imageDir);
-    const imagePath = join(imageDir, 'legacy.png');
     const image = Buffer.from((await cdp.call('Page.captureScreenshot', { format: 'png' })).data, 'base64');
-    await writeFile(imagePath, image);
+    const seed = join(temp, 'seed.png'); await writeFile(seed, image);
+    const script = join(temp, 'synthetic-collector.cjs');
+    await writeFile(script, `const fs = require('node:fs'); const path = require('node:path');
+      const dir = process.env.FACTORY_UI_EVIDENCE_DIRECTORY;
+      fs.copyFileSync(${JSON.stringify(seed)}, path.join(dir, 'dashboard-1440.png'));
+      fs.writeFileSync(path.join(dir, 'tree.json'), '{}');
+      fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({version:1, taskId:process.env.FACTORY_TASK_ID, attempt:Number(process.env.FACTORY_ATTEMPT), capturedAt:new Date().toISOString(), sourceFingerprint:process.env.FACTORY_SOURCE_FINGERPRINT, application:{framework:'synthetic', buildId:'fixture'}, checks:[{kind:'interaction',name:${JSON.stringify(dashboardCheckName)},status:'passed'},{kind:'accessibility',name:'Accessible',status:'passed'}], artifacts:[{kind:'screenshot',path:'dashboard-1440.png'},{kind:'accessibility-tree',path:'tree.json'}], ...${JSON.stringify(dashboardImageLinks('1'))}, limitations:[]}));`);
+    const record = await collectUiEvidence({ directory: join(temp, 'synthetic-evidence'), command: { executable: process.execPath, args: [script] }, syntheticDeveloperReviewAuthorized: true }, { repository: worktree, taskId: 'T001', attempt: 1 }, new ContractValidator(resolve('contracts')));
+    if (!record.passed) throw new Error(`Synthetic collection failed: ${record.issues.join(', ')}`);
+    const imagePath = record.artifacts.find(a => a.kind === 'screenshot')!.path;
     const fixture = JSON.parse(await readFile(resolve('tests/browser-evidence/fixture.json'), 'utf8'));
-    const checkName = 'Synthetic dashboard interaction';
+    const checkName = dashboardCheckName;
     fixture.runId = 'report';
     fixture.plan.objective = 'Synthetic populated report';
     fixture.plan.tasks[0].acceptanceCriteria = ['Show the synthetic dashboard.', 'Demonstrate an unsupported behavior.'];
     fixture.plan.tasks[0].criterionChecks = [{ criterion: 0, checks: [checkName] }];
     fixture.git = { worktree };
-    fixture.tasks.T001.attempts[0].uiEvidence = {
-      passed: true, syntheticDeveloperReviewAuthorized: true, directory: imageDir,
-      manifest: { taskId: 'T001', attempt: 1, checks: [{ name: checkName, status: 'passed' }],
-        artifacts: [{ kind: 'screenshot', path: 'legacy.png' }],
-        imageLinks: [{ checkName, screenshotPath: 'legacy.png', caption: 'Synthetic dashboard before report selection' }] },
-      artifacts: [{ kind: 'screenshot', path: await realpath(imagePath), imageType: 'image/png', sha256: createHash('sha256').update(image).digest('hex') }]
-    };
+    fixture.tasks.T001.attempts[0].uiEvidence = record;
     fixture.evidenceReport = { runId: 'report', identity: { plan: planIdentity(fixture.plan), specification: null, implementation: await dashboardImplementationIdentity(worktree) },
       summary: 'The dashboard presents a read-only evidence report.', verification: 'passed', gaps: ['A separate criterion has no direct evidence.'],
       criteria: [
@@ -264,14 +267,14 @@ async function run(): Promise<void> {
         const img = cards[0]?.querySelector('figure img');
         return cards.length === 2 && cards[0].textContent.includes('Expected: Show the synthetic dashboard.') &&
           cards[0].querySelector('.badge')?.textContent === 'demonstrated' &&
-          cards[0].querySelector('figcaption')?.textContent === 'Synthetic dashboard before report selection' &&
+          cards[0].querySelector('figcaption')?.textContent === 'Synthetic populated report after keyboard interaction' &&
           cards[1].textContent.includes('Expected: Demonstrate an unsupported behavior.') &&
           cards[1].querySelector('.badge')?.textContent === 'not demonstrated' &&
           !cards[1].querySelector('img') && cards[1].textContent.includes('Screenshot unavailable.') &&
           details.textContent.includes('The dashboard presents a read-only evidence report.') &&
           details.textContent.includes('Verification outcome: passed') && details.textContent.includes('A separate criterion has no direct evidence.') &&
           details.textContent.includes('demonstrated') && details.textContent.includes('not demonstrated') &&
-          details.textContent.includes('Screenshot unavailable.') && details.textContent.includes('Synthetic dashboard before report selection') &&
+          details.textContent.includes('Screenshot unavailable.') && details.textContent.includes('Synthetic populated report after keyboard interaction') &&
           img && img.complete && img.naturalWidth > 0 && img.getAttribute('src').startsWith('/api/runs/report/screenshots/') &&
           document.getElementById('activity-panel').hidden && document.getElementById('timeline').textContent.includes('Synthetic process narrative must remain hidden');
       })()`));
@@ -296,7 +299,7 @@ async function run(): Promise<void> {
       await sleep(100);
       if (!await evaluate('document.documentElement.scrollWidth <= document.documentElement.clientWidth')) throw new Error(`Horizontal overflow at ${width}px`);
       const tree = await cdp.call('Accessibility.getFullAXTree');
-      if (!Array.isArray(tree.nodes) || !['Refresh now', 'Synthetic populated report'].every(name => tree.nodes.some((n: any) => n.role?.value === 'button' && n.name?.value?.includes(name))) || !tree.nodes.some((n: any) => n.name?.value?.includes('Supporting run details')) || !tree.nodes.some((n: any) => n.name?.value?.includes('Synthetic dashboard before report selection'))) throw new Error(`Report accessibility content missing at ${width}px`);
+      if (!Array.isArray(tree.nodes) || !['Refresh now', 'Synthetic populated report'].every(name => tree.nodes.some((n: any) => n.role?.value === 'button' && n.name?.value?.includes(name))) || !tree.nodes.some((n: any) => n.name?.value?.includes('Supporting run details')) || !tree.nodes.some((n: any) => n.name?.value?.includes('Synthetic populated report after keyboard interaction'))) throw new Error(`Report accessibility content missing at ${width}px`);
       // Include the entire report at narrow widths, where its criteria fall below
       // the run list and would otherwise be outside the viewport capture.
       const metrics = await cdp.call('Page.getLayoutMetrics');
@@ -310,7 +313,7 @@ async function run(): Promise<void> {
     }
     collectedArtifacts = artifacts;
   });
-  await bounded(writeFile(join(output, 'manifest.json'), JSON.stringify({ version: 1, taskId, attempt, capturedAt: new Date().toISOString(), sourceFingerprint: fingerprint, application: { framework: 'dashboard HTML/JavaScript', buildId: fingerprint }, checks: [{ kind: 'interaction', name: 'Keyboard selection, disclosure, refresh and focus restoration; persisted task, check and phase', status: 'passed' }, { kind: 'accessibility', name: 'Named controls and no document overflow at 1440, 768 and 390 pixels', status: 'passed' }, { kind: 'interaction', name: 'Current report summary, gaps, statuses, served captioned image, unavailable image and hidden activity', status: 'passed' }], artifacts: collectedArtifacts, ...dashboardImageLinks(process.env.FACTORY_UI_EVIDENCE_IMAGE_LINKS), limitations: ['Synthetic persisted run and selected keyboard interactions only; viewport and named-control checks are not a complete accessibility audit or certification.'] }, null, 2), { signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())) }), Math.max(1, deadline - Date.now()), 'Manifest write');
+  await bounded(writeFile(join(output, 'manifest.json'), JSON.stringify({ version: 1, taskId, attempt, capturedAt: new Date().toISOString(), sourceFingerprint: fingerprint, application: { framework: 'dashboard HTML/JavaScript', buildId: fingerprint }, checks: [{ kind: 'interaction', name: dashboardCheckName, status: 'passed' }, { kind: 'accessibility', name: 'Named controls and no document overflow at 1440, 768 and 390 pixels', status: 'passed' }, { kind: 'interaction', name: 'Current report summary, gaps, statuses, served captioned image, unavailable image and hidden activity', status: 'passed' }], artifacts: collectedArtifacts, ...dashboardImageLinks(process.env.FACTORY_UI_EVIDENCE_IMAGE_LINKS), limitations: ['Synthetic persisted run and selected keyboard interactions only; viewport and named-control checks are not a complete accessibility audit or certification.'] }, null, 2), { signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())) }), Math.max(1, deadline - Date.now()), 'Manifest write');
 }
 
 export function failCommand(): never {

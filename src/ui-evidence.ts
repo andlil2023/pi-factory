@@ -5,6 +5,7 @@ import { lstat, mkdir, mkdtemp, readFile, readlink, realpath } from 'node:fs/pro
 import { isAbsolute, join, relative, resolve, sep, win32 } from 'node:path';
 import { promisify } from 'node:util';
 import { ContractValidator } from './contract-validator.ts';
+import { implementationIdentity } from './verification-observations.ts';
 
 const exec = promisify(execFile);
 export interface UiEvidenceCommand { executable: string; args?: string[]; timeoutMs?: number }
@@ -28,6 +29,8 @@ export interface UiEvidenceRecord {
   artifacts: Array<{ kind: string; path: string; sha256: string; imageType?: 'image/png' | 'image/jpeg' }>;
   /** Trusted configuration snapshot, never supplied by the collector. Missing on legacy records means false. */
   syntheticDeveloperReviewAuthorized?: boolean;
+  /** Factory-measured Git tree before and after collection, not collector output. */
+  implementationIdentity?: string;
   issues: string[];
 }
 
@@ -86,6 +89,7 @@ export async function collectUiEvidence(config: UiEvidenceConfig, context: { rep
     if (root === repository || inside(repository, root)) throw new Error('UI evidence directory must be outside the target worktree');
     result.directory = await mkdtemp(join(root, `${context.taskId}-${context.attempt}-`));
     const fingerprint = await sourceFingerprint(repository);
+    const implementation = await implementationIdentity(repository);
     const started = Date.now();
     try {
       await exec(config.command.executable, config.command.args ?? [], {
@@ -100,7 +104,7 @@ export async function collectUiEvidence(config: UiEvidenceConfig, context: { rep
       throw new Error('UI evidence collector command failed or timed out');
     }
     const ended = Date.now();
-    if (await sourceFingerprint(repository) !== fingerprint) throw new Error('Source changed during UI evidence collection');
+    if (await sourceFingerprint(repository) !== fingerprint || await implementationIdentity(repository) !== implementation) throw new Error('Source changed during UI evidence collection');
     const manifestPath = await realpath(join(result.directory, 'manifest.json'));
     if (!inside(result.directory, manifestPath)) throw new Error('Manifest escapes evidence directory');
     if ((await lstat(manifestPath)).size > 1_000_000) throw new Error('UI evidence manifest is too large');
@@ -142,6 +146,7 @@ export async function collectUiEvidence(config: UiEvidenceConfig, context: { rep
       }
       result.artifacts.push({ kind: artifact.kind, path, sha256: createHash('sha256').update(bytes).digest('hex'), ...(imageType ? { imageType } : {}) });
     }
+    result.implementationIdentity = implementation;
     result.passed = true;
   } catch (error) {
     // Avoid persisting collector stdout/stderr, which may contain sensitive app data.

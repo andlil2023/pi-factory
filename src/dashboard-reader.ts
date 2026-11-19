@@ -180,7 +180,7 @@ export class DashboardReader {
       if (!task || mappings.length !== 1 || !Array.isArray(mappings[0].checks)) continue;
       for (const [attemptIndex, attempt] of task.attempts.entries()) {
         const record = attempt.uiEvidence;
-        if (!record?.passed || record.syntheticDeveloperReviewAuthorized !== true || !record.manifest || record.manifest.taskId !== task.id || record.manifest.attempt !== attempt.number || !Array.isArray(record.manifest.imageLinks)) continue;
+        if (!record?.passed || !state.evidenceReport?.identity.implementation || record.implementationIdentity !== state.evidenceReport.identity.implementation || record.syntheticDeveloperReviewAuthorized !== true || !record.manifest || record.manifest.taskId !== task.id || record.manifest.attempt !== attempt.number || !Array.isArray(record.manifest.imageLinks)) continue;
         for (const [linkIndex, link] of record.manifest.imageLinks.entries()) {
           if (!link || typeof link.checkName !== 'string' || !mappings[0].checks.includes(link.checkName) || typeof link.screenshotPath !== 'string' || typeof link.caption !== 'string' || !link.caption.trim() || /[\u0000-\u001f\u007f]/.test(link.caption)) continue;
           if (!Array.isArray(record.manifest.checks) || record.manifest.checks.filter(c => c.name === link.checkName && c.status === 'passed').length !== 1 || !Array.isArray(record.manifest.artifacts) || record.manifest.artifacts.filter(a => a.kind === 'screenshot' && a.path === link.screenshotPath).length !== 1) continue;

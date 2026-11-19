@@ -32,8 +32,15 @@ export function buildEvidenceReport(state: FactoryRunState, implementation: stri
     let failed = false;
     for (const name of names) {
       const matches = observations.filter(o => o && o.name === name);
-      if (matches.length !== 1) { missing = true; continue; }
-      const observation = matches[0];
+      // Multiple observations are only resolvable when they form one complete rerun chain.
+      // Legacy single observations remain usable; unrelated duplicates stay ambiguous.
+      if (!matches.length || (matches.length > 1 && !matches.every((o, i) =>
+        o.execution && Number.isSafeInteger(o.execution.commandIndex) && o.execution.commandIndex >= 0 &&
+        o.execution.commandIndex === matches[0].execution?.commandIndex && o.execution.rerun === i &&
+        (i === matches.length - 1 || o.passed === false) &&
+        JSON.stringify(o.identity) === JSON.stringify(matches[0].identity)))) { missing = true; continue; }
+      if (matches.length === 1 && matches[0].execution && matches[0].execution.rerun !== 0) { missing = true; continue; }
+      const observation = matches[matches.length - 1];
       const observedIdentity: VerificationIdentity | null = observation.identity;
       if (!implementation || !observedIdentity || observedIdentity.plan !== identity.plan || observedIdentity.specification !== identity.specification || observedIdentity.implementation !== implementation || typeof observation.passed !== 'boolean') { missing = true; continue; }
       evidence.push(`Named check ${name}: ${observation.passed ? 'passed' : 'failed'}.`);

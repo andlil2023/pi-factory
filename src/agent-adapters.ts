@@ -218,7 +218,7 @@ export function createAgentAdapters(config: AgentAdapterConfig): OrchestratorAda
           const result = await run(command, index, rerun);
           if (command.name) {
             const after = await identity();
-            observations.push({ name: command.name, passed: result.passed, identity: before && after && JSON.stringify(before) === JSON.stringify(after) ? before : null });
+            observations.push({ name: command.name, passed: result.passed, identity: before && after && JSON.stringify(before) === JSON.stringify(after) ? before : null, execution: { commandIndex: index, rerun } });
           }
           return result;
         };

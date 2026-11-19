@@ -8,7 +8,7 @@ import { promisify } from 'node:util';
 const exec = promisify(execFile);
 export interface VerificationCommand { executable: string; args?: string[]; timeoutMs?: number; name?: string }
 export interface VerificationIdentity { plan: string; specification: string | null; implementation: string }
-export interface NamedObservation { name: string; passed: boolean; identity: VerificationIdentity | null }
+export interface NamedObservation { name: string; passed: boolean; identity: VerificationIdentity | null; execution?: { commandIndex: number; rerun: number } }
 
 export function validateVerificationCommands(commands: VerificationCommand[]): void {
   if (!Array.isArray(commands)) throw new Error('Invalid verification commands');
