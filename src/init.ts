@@ -23,6 +23,7 @@ export async function initialize(targetPath: string, force = false): Promise<voi
   await mkdir(join(target, '.factory'), { recursive: true });
   await copyIfMissing(join(factoryRoot, 'factory.config.example.json'), join(target, '.factory', 'config.json'));
   await copyIfMissing(join(factoryRoot, 'examples', 'objective.md'), join(target, '.factory', 'objective.md'));
+  await copyIfMissing(join(factoryRoot, 'templates', 'specification.md'), join(target, '.factory', 'specification-template.md'));
   console.log('Initialized target project. Edit .factory/config.json and .factory/objective.md.');
 }
 
