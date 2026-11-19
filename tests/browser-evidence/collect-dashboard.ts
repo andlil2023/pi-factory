@@ -233,6 +233,7 @@ async function run(): Promise<void> {
     const checkName = 'Synthetic dashboard interaction';
     fixture.runId = 'report';
     fixture.plan.objective = 'Synthetic populated report';
+    fixture.plan.tasks[0].acceptanceCriteria = ['Show the synthetic dashboard.', 'Demonstrate an unsupported behavior.'];
     fixture.plan.tasks[0].criterionChecks = [{ criterion: 0, checks: [checkName] }];
     fixture.git = { worktree };
     fixture.tasks.T001.attempts[0].uiEvidence = {
@@ -259,8 +260,15 @@ async function run(): Promise<void> {
     for (let i = 0; i < 100; i++) {
       reportReady = Boolean(await evaluate(`(() => {
         const details = document.getElementById('details');
-        const img = details.querySelector('.report-image img');
-        return details.textContent.includes('The dashboard presents a read-only evidence report.') &&
+        const cards = details.querySelectorAll('.report-criterion');
+        const img = cards[0]?.querySelector('figure img');
+        return cards.length === 2 && cards[0].textContent.includes('Expected: Show the synthetic dashboard.') &&
+          cards[0].querySelector('.badge')?.textContent === 'demonstrated' &&
+          cards[0].querySelector('figcaption')?.textContent === 'Synthetic dashboard before report selection' &&
+          cards[1].textContent.includes('Expected: Demonstrate an unsupported behavior.') &&
+          cards[1].querySelector('.badge')?.textContent === 'not demonstrated' &&
+          !cards[1].querySelector('img') && cards[1].textContent.includes('Screenshot unavailable.') &&
+          details.textContent.includes('The dashboard presents a read-only evidence report.') &&
           details.textContent.includes('Verification outcome: passed') && details.textContent.includes('A separate criterion has no direct evidence.') &&
           details.textContent.includes('demonstrated') && details.textContent.includes('not demonstrated') &&
           details.textContent.includes('Screenshot unavailable.') && details.textContent.includes('Synthetic dashboard before report selection') &&
@@ -270,6 +278,12 @@ async function run(): Promise<void> {
       if (reportReady) break; await sleep(100);
     }
     if (!reportReady) throw new Error('Populated report, image, gaps, statuses or hidden activity did not load');
+    // The same screenshot that was rendered must fail closed if its bytes change.
+    const screenshotUrl = `http://127.0.0.1:${address.port}/api/runs/report/screenshots/T001/0/0`;
+    if ((await fetch(screenshotUrl)).status !== 200) throw new Error('Associated screenshot was not served');
+    await writeFile(imagePath, Buffer.concat([image, Buffer.from('tampered')]));
+    if ((await fetch(screenshotUrl)).status !== 404) throw new Error('Modified screenshot was served');
+    await writeFile(imagePath, image);
     if (!await evaluate("!document.querySelector('#details details').open")) throw new Error('Supporting details must start collapsed');
     await evaluate("document.querySelector('#details summary').focus()"); await key('Enter', 'Enter', 13);
     if (!await evaluate("document.querySelector('#details details').open")) throw new Error('Report supporting details are not keyboard accessible');

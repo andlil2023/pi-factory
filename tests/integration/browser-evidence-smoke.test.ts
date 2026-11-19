@@ -18,7 +18,11 @@ test('real browser collector validates and leaves its owned resources closed', {
   const directory = await mkdtemp(join(tmpdir(), 'dashboard-evidence-test-'));
   try {
     const repository = resolve('.');
-    const record = await collectUiEvidence({ directory, syntheticDeveloperReviewAuthorized: true, command: { executable: process.execPath, args: ['--experimental-strip-types', 'tests/browser-evidence/collect-dashboard.ts'], timeoutMs: 180000 } }, { repository, taskId: 'T001', attempt: 1 }, new ContractValidator(resolve('contracts')));
+    const demo = JSON.parse(await readFile(resolve('tests/browser-evidence/factory.config.demo.json'), 'utf8'));
+    const defaults = JSON.parse(await readFile(resolve('factory.config.json'), 'utf8'));
+    assert.notEqual(defaults.uiEvidence?.syntheticDeveloperReviewAuthorized, true);
+    assert.equal(demo.uiEvidence.syntheticDeveloperReviewAuthorized, true);
+    const record = await collectUiEvidence({ directory, ...demo.uiEvidence }, { repository, taskId: 'T001', attempt: 1 }, new ContractValidator(resolve('contracts')));
     assert.equal(record.passed, true, record.issues.join('\n'));
     await assertUiEvidenceCurrent(record, repository);
     assert.equal(record.artifacts.length, 6);
