@@ -58,6 +58,16 @@ test('entry point initializes and runs workflows using its own assets outside th
       assert.notEqual(rejected.status, 0);
       assert.match(rejected.stderr, /requires --approve/i);
     }
+    const noVerification = join(temp, 'no-verification.json');
+    await writeFile(noVerification, JSON.stringify({ agents: { planner: { provider: 'test', model: 'test' }, implementer: { provider: 'test', model: 'test' }, reviewer: { provider: 'test', model: 'test' } } }));
+    const unconfigured = cli('run', '--repo', target, '--config', noVerification, '--plan', output, '--approve');
+    assert.notEqual(unconfigured.status, 0);
+    assert.match(unconfigured.stderr, /at least one trusted verification command/i);
+    const blocking = join(temp, 'blocking.json');
+    await writeFile(blocking, JSON.stringify({ ...plan, decisions: [{ id: 'D001', question: 'Resolve?', blocking: true, affectedTasks: ['T001'] }] }));
+    const unresolved = cli('run', '--repo', target, '--config', config, '--plan', blocking, '--approve');
+    assert.notEqual(unresolved.status, 0);
+    assert.match(unresolved.stderr, /unresolved blocking decisions/i);
     const invalidTarget = cli('run', '--repo', target, '--config', config, '--plan', output, '--approve');
     assert.notEqual(invalidTarget.status, 0);
     assert.match(invalidTarget.stderr, /git rev-parse failed/i);
