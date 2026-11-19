@@ -27,6 +27,7 @@ test('dashboard reader projects state, isolates unavailable runs, and limits eve
     assert.deepEqual(runs.map(r => [r.runId, r.available]), [['broken', false], ['good', true], ['large', false], ['partial', false]]);
     const good = await reader.readRun('good'); assert.ok(good.available);
     assert.equal(good.run.label, 'good');
+    assert.equal(good.run.evidenceReport, null);
     assert.equal(good.run.objectiveSummary, undefined);
     assert.deepEqual(good.run.autoReplans, []);
     assert.equal(good.run.tasks[0].attempts[0].flakyCount, 0);

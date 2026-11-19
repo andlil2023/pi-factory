@@ -1,5 +1,8 @@
-import { open, readdir, readFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { open, readdir, readFile, realpath } from 'node:fs/promises';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { createHash } from 'node:crypto';
+import { planIdentity } from './verification-observations.ts';
+import { dashboardImplementationIdentity } from './dashboard-identity.ts';
 import { consumedAttempts, type FactoryRunState, type TaskState } from './state-store.ts';
 
 const MAX_STATE_BYTES = 5 * 1024 * 1024;
@@ -122,19 +125,19 @@ export function projectRun(state: FactoryRunState) {
     }))
   };
 }
-export type ProjectedRun = ReturnType<typeof projectRun>;
+export type ProjectedRun = ReturnType<typeof projectRun> & { evidenceReport?: unknown; screenshots?: Array<{ taskId: string; criterion: number; checkName: string; caption: string; url: string }> };
 export type RunRead = { runId: string; available: true; run: ProjectedRun } | { runId: string; available: false };
 
 export class DashboardReader {
   readonly directory: string;
   constructor(repository: string) { this.directory = join(resolve(repository), '.factory', 'runs'); }
-  async readRun(runId: string): Promise<RunRead> {
+  private async readState(runId: string): Promise<FactoryRunState | undefined> {
     assertId(runId);
     try {
       const handle = await open(join(this.directory, `${runId}.json`), 'r');
       try {
         const stat = await handle.stat();
-        if (!stat.isFile() || stat.size > MAX_STATE_BYTES) return { runId, available: false };
+        if (!stat.isFile() || stat.size > MAX_STATE_BYTES) return undefined;
         // Bounded read also handles a file growing after stat.
         const buffer = Buffer.alloc(MAX_STATE_BYTES + 1);
         let size = 0;
@@ -143,12 +146,86 @@ export class DashboardReader {
           if (!bytesRead) break;
           size += bytesRead;
         }
-        if (size > MAX_STATE_BYTES) return { runId, available: false };
+        if (size > MAX_STATE_BYTES) return undefined;
         const value: unknown = JSON.parse(buffer.subarray(0, size).toString('utf8'));
-        if (!validState(value, runId)) return { runId, available: false };
-        return { runId, available: true, run: projectRun(value) };
+        if (!validState(value, runId)) return undefined;
+        return value;
       } finally { await handle.close(); }
-    } catch { return { runId, available: false }; }
+    } catch { return undefined; }
+  }
+  private async currentReport(state: FactoryRunState) {
+    const report = state.evidenceReport;
+    if (!report || !object(report.identity) || !object(state.plan) || !state.git?.worktree ||
+        typeof report.identity.implementation !== 'string' || !report.identity.implementation ||
+        report.runId !== state.runId || report.identity.plan !== planIdentity(state.plan) ||
+        (state.specification !== undefined && (typeof state.specification.sha256 !== 'string' || !state.specification.sha256)) ||
+        report.identity.specification !== (state.specification?.sha256 ?? null)) return undefined;
+    try {
+      if (await dashboardImplementationIdentity(state.git.worktree) !== report.identity.implementation) return undefined;
+    } catch { return undefined; }
+    if (typeof report.summary !== 'string' || !['passed', 'failed', 'unavailable'].includes(report.verification) ||
+        !Array.isArray(report.gaps) || !report.gaps.every(x => typeof x === 'string') || !Array.isArray(report.criteria) ||
+        !report.criteria.every(c => object(c) && typeof c.taskId === 'string' && Number.isSafeInteger(c.criterion) &&
+          typeof c.expected === 'string' && ['demonstrated', 'failed', 'not demonstrated'].includes(c.status) &&
+          typeof c.observed === 'string' && Array.isArray(c.evidence) && c.evidence.every((x: unknown) => typeof x === 'string'))) return undefined;
+    return { summary: report.summary, verification: report.verification, gaps: report.gaps,
+      criteria: report.criteria.map(c => ({ taskId: c.taskId, criterion: c.criterion, expected: c.expected, status: c.status, observed: c.observed, evidence: c.evidence })) };
+  }
+  private links(state: FactoryRunState, report: NonNullable<Awaited<ReturnType<DashboardReader['currentReport']>>>) {
+    const links: Array<{ taskId: string; criterion: number; checkName: string; caption: string; url: string; record: NonNullable<TaskState['attempts'][number]['uiEvidence']>; path: string }> = [];
+    const plan = state.plan as { tasks?: Array<{ id: string; criterionChecks?: Array<{ criterion: number; checks: string[] }> }> };
+    for (const criterion of report.criteria) {
+      const task = state.tasks[criterion.taskId];
+      const mappings = plan.tasks?.find(t => t.id === criterion.taskId)?.criterionChecks?.filter(m => m.criterion === criterion.criterion) ?? [];
+      if (!task || mappings.length !== 1 || !Array.isArray(mappings[0].checks)) continue;
+      for (const [attemptIndex, attempt] of task.attempts.entries()) {
+        const record = attempt.uiEvidence;
+        if (!record?.passed || record.syntheticDeveloperReviewAuthorized !== true || !record.manifest || record.manifest.taskId !== task.id || record.manifest.attempt !== attempt.number || !Array.isArray(record.manifest.imageLinks)) continue;
+        for (const [linkIndex, link] of record.manifest.imageLinks.entries()) {
+          if (!link || typeof link.checkName !== 'string' || !mappings[0].checks.includes(link.checkName) || typeof link.screenshotPath !== 'string' || typeof link.caption !== 'string' || !link.caption.trim() || /[\u0000-\u001f\u007f]/.test(link.caption)) continue;
+          if (!Array.isArray(record.manifest.checks) || record.manifest.checks.filter(c => c.name === link.checkName && c.status === 'passed').length !== 1 || !Array.isArray(record.manifest.artifacts) || record.manifest.artifacts.filter(a => a.kind === 'screenshot' && a.path === link.screenshotPath).length !== 1) continue;
+          links.push({ taskId: task.id, criterion: criterion.criterion, checkName: link.checkName, caption: link.caption, url: `/api/runs/${state.runId}/screenshots/${encodeURIComponent(task.id)}/${attemptIndex}/${linkIndex}`, record, path: link.screenshotPath });
+        }
+      }
+    }
+    return links;
+  }
+  async readRun(runId: string): Promise<RunRead> {
+    const state = await this.readState(runId);
+    if (!state) return { runId, available: false };
+    const report = await this.currentReport(state);
+    const screenshots = report ? this.links(state, report).map(({ taskId, criterion, checkName, caption, url }) => ({ taskId, criterion, checkName, caption, url })) : [];
+    return { runId, available: true, run: { ...projectRun(state), evidenceReport: report ?? null, screenshots } };
+  }
+  async readScreenshot(runId: string, taskId: string, attemptIndex: number, linkIndex: number) {
+    const state = await this.readState(runId);
+    if (!state) return undefined;
+    const report = await this.currentReport(state);
+    if (!report) return undefined;
+    const url = `/api/runs/${runId}/screenshots/${encodeURIComponent(taskId)}/${attemptIndex}/${linkIndex}`;
+    const link = this.links(state, report).find(item => item.url === url);
+    if (!link) return undefined;
+    try {
+      const root = await realpath(link.record.directory);
+      const path = await realpath(resolve(root, link.path));
+      const rel = relative(root, path);
+      if (!rel || isAbsolute(rel) || rel === '..' || rel.startsWith(`..${sep}`)) return undefined;
+      const artifacts = link.record.artifacts.filter(a => a.kind === 'screenshot' && a.path === path);
+      if (artifacts.length !== 1 || !/^[a-f0-9]{64}$/.test(artifacts[0].sha256)) return undefined;
+      const handle = await open(path, 'r');
+      try {
+        const stat = await handle.stat();
+        if (!stat.isFile() || stat.size === 0 || stat.size > 20 * 1024 * 1024) return undefined;
+        const bytes = Buffer.alloc(stat.size + 1);
+        let size = 0;
+        while (size < bytes.length) { const result = await handle.read(bytes, size, bytes.length - size, size); if (!result.bytesRead) break; size += result.bytesRead; }
+        if (size !== stat.size) return undefined;
+        const data = bytes.subarray(0, size);
+        const type = data.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) ? 'image/png' : data[0] === 255 && data[1] === 216 && data[2] === 255 ? 'image/jpeg' : undefined;
+        if (!type || type !== artifacts[0].imageType || createHash('sha256').update(data).digest('hex') !== artifacts[0].sha256) return undefined;
+        return { type, data };
+      } finally { await handle.close(); }
+    } catch { return undefined; }
   }
   async listRuns(): Promise<RunRead[]> {
     let names: string[];

@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { DashboardReader } from './dashboard-reader.ts';
 
-const csp = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'";
+const csp = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'";
 const idPattern = /^[a-zA-Z0-9_-]+$/;
 
 /** Read-only dashboard. Run: node --experimental-strip-types src/dashboard-server.ts REPOSITORY [PORT] (default 3000).
@@ -43,6 +43,12 @@ export function createDashboardServer(repository: string) {
         res.writeHead(200, { 'Content-Type': `${type}; charset=utf-8` }).end(content); return;
       }
       if (pathname === '/api/runs') { json(await reader.listRuns()); return; }
+      const image = /^\/api\/runs\/([a-zA-Z0-9_-]+)\/screenshots\/([a-zA-Z0-9_-]+)\/(0|[1-9]\d*)\/(0|[1-9]\d*)$/.exec(pathname);
+      if (image) {
+        const screenshot = await reader.readScreenshot(image[1], image[2], Number(image[3]), Number(image[4]));
+        if (!screenshot) { res.writeHead(404).end(); return; }
+        res.writeHead(200, { 'Content-Type': screenshot.type }).end(screenshot.data); return;
+      }
       const match = /^\/api\/runs\/([^/]+)(?:\/(events|live))?$/.exec(pathname);
       if (!match || !idPattern.test(match[1])) { res.writeHead(404).end(); return; }
       const [, id, action] = match;
