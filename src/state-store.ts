@@ -3,6 +3,7 @@ import { dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { ReviewSelection } from './review-routing.ts';
 import type { UiEvidenceRecord } from './ui-evidence.ts';
+import type { EvidenceReport } from './evidence-report.ts';
 
 export type TaskStatus = 'pending' | 'running' | 'needs_review' | 'repair_pending' | 'completed' | 'blocked';
 /** `error` is an agent/infrastructure failure, as opposed to work the implementer reported as `failed`. */
@@ -119,6 +120,8 @@ export interface FactoryRunState {
   autoReplans?: Array<{ at: string; taskId: string; reason: 'task_too_large' | 'budget_exhausted'; superseded: string[]; added: string[]; leftoverPatch?: string }>;
   /** Repairs of rejected integration candidates, referencing the persisted attempt rather than copying its feedback. */
   integrationRepairs?: Array<{ at: string; taskId: string; integrationAttempt: number; withdrawn?: boolean }>;
+  /** Observational snapshot; readers must compare its identities with the current run. */
+  evidenceReport?: EvidenceReport;
   finalVerificationProgress?: VerificationProgress & { startedAt?: string };
   finalVerification?: { passed: boolean; details: unknown; checkedAt: string; head?: string };
   /** Repair tasks added after a failed final verification; bounded by execution.maxFinalRepairs. */

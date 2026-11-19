@@ -28,6 +28,7 @@ Make sure build/test outputs such as `bin/` and `obj/` are Git-ignored. The coll
 | `FACTORY_TASK_ID` | Assigned task ID, e.g. `T001` |
 | `FACTORY_ATTEMPT` | Positive attempt number |
 | `FACTORY_SOURCE_FINGERPRINT` | SHA-256 identity of HEAD and current Git-visible source, including untracked files |
+| `FACTORY_UI_EVIDENCE_IMAGE_LINKS` | `1` when the host supports the optional `imageLinks` manifest property; otherwise omit that property |
 
 Write `manifest.json` directly within the output directory. Artifact paths must be relative to that directory; absolute paths, traversal, and links to outside files are rejected. Screenshots must be PNG or JPEG. Artifacts must be nonempty regular files of at most 20 MiB each; the manifest is limited to 1 MB. Do not write credentials into checks, limitations, screenshots, trees, or logs.
 
@@ -54,9 +55,14 @@ This is illustrative, not runnable evidence. Replace all example identities, tim
     { "kind": "accessibility-tree", "path": "settings-uia-tree.json" },
     { "kind": "log", "path": "interaction-results.txt" }
   ],
+  "imageLinks": [
+    { "checkName": "Save settings with keyboard", "screenshotPath": "settings-window.png", "caption": "Settings window after saving" }
+  ],
   "limitations": ["Verified at 100% DPI only"]
 }
 ```
+
+Only emit optional `imageLinks` when `FACTORY_UI_EVIDENCE_IMAGE_LINKS` is exactly `1`; legacy hosts reject unknown properties. Capability negotiation does not authorize display. The links explicitly associate a unique check name with a screenshot artifact path and a plain-text caption; unrelated screenshots are not implicitly associated with any check. The trusted factory configuration may set `uiEvidence.syntheticDeveloperReviewAuthorized` to `true` only for a synthetic collector whose images are approved for developer-review display. It defaults to false; collector output cannot grant this authorization. The factory records the configured authorization at collection time. This setting does not itself expose images or change review gates.
 
 At least one interaction check and one accessibility check must be present and all checks must pass. Both screenshot and accessibility-tree artifacts are mandatory. A log is optional. The factory validates file presence, confinement, image signatures, and hashes; it does not itself prove image authenticity, parse the UIA tree's semantics, or decide whether the test coverage is sufficient. The independent UI reviewer evaluates those against the task's acceptance criteria and must disclose limitations.
 

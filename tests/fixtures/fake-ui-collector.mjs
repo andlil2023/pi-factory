@@ -26,6 +26,17 @@ const manifest = {
   artifacts: [ { kind: 'screenshot', path: 'window.png' }, { kind: 'accessibility-tree', path: 'tree.json' } ],
   limitations: ['Fixture only; not real WPF evidence']
 };
+if (['linked', 'unknown-check', 'ambiguous-check', 'unknown-image', 'tree-link', 'blank-caption', 'forged-authorization'].includes(mode)) {
+  await writeFile(join(dir, 'unrelated.png'), image);
+  manifest.artifacts.push({ kind: 'screenshot', path: 'unrelated.png' });
+  if (process.env.FACTORY_UI_EVIDENCE_IMAGE_LINKS === '1') manifest.imageLinks = [{ checkName: 'Keyboard navigation', screenshotPath: 'window.png', caption: 'Main window' }];
+}
+if (mode === 'unknown-check') manifest.imageLinks[0].checkName = 'Unknown';
+if (mode === 'ambiguous-check') manifest.checks.push({ ...manifest.checks[0] });
+if (mode === 'unknown-image') manifest.imageLinks[0].screenshotPath = 'missing.png';
+if (mode === 'tree-link') manifest.imageLinks[0].screenshotPath = 'tree.json';
+if (mode === 'blank-caption') manifest.imageLinks[0].caption = '  ';
+if (mode === 'forged-authorization') manifest.syntheticDeveloperReviewAuthorized = true;
 if (mode === 'wrong-task') manifest.taskId = 'T999';
 if (mode === 'wrong-attempt') manifest.attempt++;
 if (mode === 'stale') manifest.capturedAt = '2000-01-01T00:00:00Z';

@@ -20,7 +20,8 @@ class Element {
   append(...children: Element[]) { this.children.push(...children); }
   replaceChildren() { this.children = []; }
   contains(element: Element): boolean { return this === element || this.children.some(child => child.contains(element)); }
-  addEventListener() {}
+  listeners: Record<string, () => void> = {};
+  addEventListener(name: string, listener: () => void) { this.listeners[name] = listener; }
   setAttribute(key: string, value: string) { this.attributes[key] = value; }
   querySelectorAll(selector: string): Element[] {
     return this.children.flatMap(child => [
@@ -32,6 +33,71 @@ class Element {
 function text(element: Element): string {
   return [element.textContent, ...element.children.map(text)].join(' ');
 }
+
+test('current report is read-only, text-only, and handles unavailable screenshots', async () => {
+  const elements = Object.fromEntries(['runs', 'list-status', 'refresh', 'details', 'detail-heading', 'detail-status', 'timeline', 'connection'].map(id => [id, new Element(id)]));
+  const context = {
+    document: { getElementById: (id: string) => elements[id], createElement: (tag: string) => new Element(tag), activeElement: null },
+    fetch: async () => ({ ok: true, json: async () => [] }), setInterval() {}, showDetails: (_entry: unknown) => {}
+  };
+  runInNewContext(await readFile(new URL('../src/dashboard/dashboard.js', import.meta.url), 'utf8'), context);
+  await new Promise(resolve => setImmediate(resolve));
+  context.showDetails({ runId: 'run', available: true, run: { status: 'running', tasks: [], evidenceReport: {
+    summary: '<script>change</script>', verification: 'failed', gaps: ['<b>gap</b>'], criteria: [
+      { taskId: 'ui', criterion: 0, expected: '<img> expected', observed: 'observed', status: 'demonstrated', evidence: ['check passed'] },
+      { taskId: 'other', criterion: 1, expected: 'expected', observed: 'missing', status: 'not demonstrated', evidence: ['gap'] },
+      { taskId: 'third', criterion: 0, expected: 'expected', observed: 'failed', status: 'failed', evidence: ['failure'] }
+    ] }, screenshots: [{ taskId: 'ui', criterion: 0, caption: '<caption>', url: '/api/runs/run/screenshots/ui/0/0' },
+      { taskId: 'other', criterion: 1, caption: 'bad', url: 'https://example.com/image' }] } });
+  const report = elements.details.children[1];
+  assert.match(text(report), /<script>change<\/script>/);
+  assert.match(text(report), /Verification outcome: failed.*<b>gap<\/b>/);
+  assert.match(text(report), /Expected: <img> expected.*Observed: observed.*check passed/);
+  assert.match(text(report), /not demonstrated/);
+  assert.match(text(report), /failed/);
+  assert.equal(report.querySelectorAll('script').length, 0);
+  const images = report.querySelectorAll('img');
+  assert.equal(images.length, 1);
+  assert.equal((images[0] as Element & { src: string }).src, '/api/runs/run/screenshots/ui/0/0');
+  assert.match(text(report), /<caption>/);
+  assert.match(text(report), /Screenshot unavailable/);
+  images[0].listeners.error();
+  assert.equal(report.querySelectorAll('img').length, 0);
+  const supporting = elements.details.querySelectorAll('details')[0];
+  assert.equal(supporting.open, false);
+  assert.equal(supporting.children[0].textContent, 'Supporting run details');
+});
+
+test('activity narratives are hidden while viewing a report and restored for older runs', async () => {
+  const elements = Object.fromEntries(['runs', 'list-status', 'refresh', 'details', 'detail-heading', 'detail-status', 'timeline', 'connection', 'activity-panel'].map(id => [id, new Element(id)]));
+  let snapshot: (event: { data: string }) => void = () => {};
+  class Events {
+    close() {}
+    addEventListener(_type: string, listener: typeof snapshot) { snapshot = listener; }
+  }
+  const legacy = { runId: 'run', available: true, run: { status: 'running', tasks: [] } };
+  const report = { ...legacy, run: { ...legacy.run, evidenceReport: { summary: 'Change.', verification: 'passed', gaps: [], criteria: [] } } };
+  const context = {
+    document: { getElementById: (id: string) => elements[id], createElement: (tag: string) => new Element(tag), activeElement: null },
+    fetch: async (url: string) => ({ ok: true, json: async () => url === '/api/runs' ? [] : report }),
+    EventSource: Events, setInterval() {}, showDetails: (_entry: unknown) => {}, selectRun: (_id: string) => {}
+  };
+  runInNewContext(await readFile(new URL('../src/dashboard/dashboard.js', import.meta.url), 'utf8'), context);
+  await new Promise(resolve => setImmediate(resolve));
+  context.selectRun('run');
+  assert.equal((elements['activity-panel'] as Element & { hidden: boolean }).hidden, true);
+  snapshot({ data: JSON.stringify([{ timestamp: '2025-01-01', type: 'RUN_STARTED', message: 'Private process narrative' }]) });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match(text(elements.timeline), /Private process narrative/);
+  assert.equal((elements['activity-panel'] as Element & { hidden: boolean }).hidden, true);
+  context.showDetails(legacy);
+  assert.equal((elements['activity-panel'] as Element & { hidden: boolean }).hidden, false);
+  context.showDetails(report);
+  assert.equal((elements['activity-panel'] as Element & { hidden: boolean }).hidden, true);
+  snapshot({ data: JSON.stringify([{ timestamp: '2025-01-02', type: 'RUN_UPDATED', message: 'Another narrative' }]) });
+  assert.equal((elements['activity-panel'] as Element & { hidden: boolean }).hidden, true);
+  assert.match(text(elements.timeline), /Another narrative/);
+});
 
 test('descriptive names, IDs and intended work render as text with narrow-layout styles', async () => {
   const elements = Object.fromEntries(['runs', 'list-status', 'refresh', 'details', 'detail-heading', 'detail-status', 'timeline', 'connection'].map(id => [id, new Element(id)]));

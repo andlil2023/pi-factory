@@ -1,0 +1,5 @@
+# Synthetic dashboard evidence demonstration
+
+`factory.config.demo.json` is a separate opt-in run configuration. Replace its model IDs with available PI models and pass it with `--config tests/browser-evidence/factory.config.demo.json` when planning and running a dashboard task in this repository. It authorizes display only for the synthetic dashboard collector; it does not change the default configuration or bypass review, approval, or integration gates. Configure other verification commands as appropriate for the run.
+
+The collector builds a disposable synthetic run and a revision-bound report, captures an associated image, checks the rendered criterion and its caption, checks an unsupported criterion, and verifies that the server rejects modified screenshot bytes. The report fixture is illustrative rather than a claim about a real implementation. The non-UI end-to-end test in `tests/integration/evidence-report.test.ts` separately exercises a factory-recorded named verification observation.

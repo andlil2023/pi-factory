@@ -39,6 +39,18 @@
         }
       }
     },
+    "imageLinks": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["checkName", "screenshotPath", "caption"],
+        "properties": {
+          "checkName": { "type": "string", "minLength": 1 },
+          "screenshotPath": { "type": "string", "minLength": 1 },
+          "caption": { "type": "string", "minLength": 1, "maxLength": 1000 }
+        }
+      }
+    },
     "limitations": { "type": "array", "items": { "type": "string", "minLength": 1 } }
   }
 }

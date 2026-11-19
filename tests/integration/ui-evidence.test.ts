@@ -56,7 +56,24 @@ test('collects task-bound desktop evidence and hashes real artifacts outside the
   assert.notEqual(again.directory, record.directory);
 });
 
+test('persists only explicit image links and trusted authorization', async t => {
+  const { repository, directory } = await fixture(t);
+  const context = { repository, taskId: 'T001', attempt: 1 };
+  const unauthorized = await collectUiEvidence(config(directory, 'linked'), context, validator);
+  assert.equal(unauthorized.passed, true, unauthorized.issues.join('\n'));
+  assert.equal(unauthorized.syntheticDeveloperReviewAuthorized, false);
+  assert.deepEqual(unauthorized.manifest?.imageLinks, [{ checkName: 'Keyboard navigation', screenshotPath: 'window.png', caption: 'Main window' }]);
+  assert.equal(unauthorized.artifacts.filter(a => a.imageType === 'image/png').length, 2);
+  assert.match(unauthorized.artifacts[0].sha256, /^[a-f0-9]{64}$/);
+  const authorized = await collectUiEvidence({ ...config(directory, 'linked'), syntheticDeveloperReviewAuthorized: true }, context, validator);
+  assert.equal(authorized.passed, true, authorized.issues.join('\n'));
+  assert.equal(authorized.syntheticDeveloperReviewAuthorized, true);
+});
+
 for (const [mode, issue] of [
+  ['unknown-check', /exactly one named check/], ['ambiguous-check', /exactly one named check/],
+  ['unknown-image', /exactly one screenshot/], ['tree-link', /exactly one screenshot/],
+  ['blank-caption', /caption/], ['forged-authorization', /Invalid UI evidence manifest/],
   ['nonzero', /collector command failed/], ['missing-manifest', /ENOENT/], ['malformed', /Invalid UI evidence manifest/],
   ['wrong-task', /task\/attempt mismatch/], ['wrong-attempt', /task\/attempt mismatch/],
   ['stale', /timestamp/], ['future', /timestamp/], ['invalid-timestamp', /timestamp/],

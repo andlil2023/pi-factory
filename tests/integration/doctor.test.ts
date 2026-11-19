@@ -42,6 +42,14 @@ test('doctor inspects configuration and tools without executing configured comma
   assert.equal((mixed.stdout.match(/Verification: a configured executable/g) ?? []).length,1);
   assert.doesNotMatch(mixed.stdout+mixed.stderr,/secret|fixture/i);
   await assert.rejects(access(marker));
+  for (const verification of [[{executable:fixture,name:'bad name'}], [{executable:fixture,name:'same'},{executable:fixture,name:'same'}]]) {
+    await writeFile(config,JSON.stringify({...base,verification}));
+    const invalidNames=run(config);
+    assert.equal(invalidNames.status,1);
+    assert.match(invalidNames.stdout,/Verification: configure valid, unique check names/);
+    assert.doesNotMatch(invalidNames.stdout+invalidNames.stderr,/fixture|SECRET_/);
+  }
+  await assert.rejects(access(marker));
   await writeFile(config,'{"SECRET_INVALID":');
   const invalid=run(config);
   assert.equal(invalid.status,1);

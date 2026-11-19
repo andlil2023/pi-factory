@@ -5,10 +5,11 @@ import { lstat, mkdir, mkdtemp, readFile, readlink, realpath } from 'node:fs/pro
 import { isAbsolute, join, relative, resolve, sep, win32 } from 'node:path';
 import { promisify } from 'node:util';
 import { ContractValidator } from './contract-validator.ts';
+import { implementationIdentity } from './verification-observations.ts';
 
 const exec = promisify(execFile);
 export interface UiEvidenceCommand { executable: string; args?: string[]; timeoutMs?: number }
-export interface UiEvidenceConfig { command: UiEvidenceCommand; directory: string }
+export interface UiEvidenceConfig { command: UiEvidenceCommand; directory: string; syntheticDeveloperReviewAuthorized?: boolean }
 export interface UiEvidenceManifest {
   version: 1;
   taskId: string;
@@ -18,13 +19,18 @@ export interface UiEvidenceManifest {
   application: { framework: string; buildId: string };
   checks: Array<{ kind: 'interaction' | 'accessibility'; name: string; status: 'passed' | 'failed'; details?: string }>;
   artifacts: Array<{ kind: 'screenshot' | 'accessibility-tree' | 'log'; path: string }>;
+  imageLinks?: Array<{ checkName: string; screenshotPath: string; caption: string }>;
   limitations: string[];
 }
 export interface UiEvidenceRecord {
   passed: boolean;
   directory: string;
   manifest?: UiEvidenceManifest;
-  artifacts: Array<{ kind: string; path: string; sha256: string }>;
+  artifacts: Array<{ kind: string; path: string; sha256: string; imageType?: 'image/png' | 'image/jpeg' }>;
+  /** Trusted configuration snapshot, never supplied by the collector. Missing on legacy records means false. */
+  syntheticDeveloperReviewAuthorized?: boolean;
+  /** Factory-measured Git tree before and after collection, not collector output. */
+  implementationIdentity?: string;
   issues: string[];
 }
 
@@ -73,29 +79,32 @@ export async function sourceFingerprint(repository: string): Promise<string> {
 
 /** Runs only a trusted configured collector. A fresh external directory prevents stale reuse. */
 export async function collectUiEvidence(config: UiEvidenceConfig, context: { repository: string; taskId: string; attempt: number }, validator: ContractValidator): Promise<UiEvidenceRecord> {
-  const result: UiEvidenceRecord = { passed: false, directory: '', artifacts: [], issues: [] };
+  const result: UiEvidenceRecord = { passed: false, directory: '', artifacts: [], issues: [], syntheticDeveloperReviewAuthorized: config.syntheticDeveloperReviewAuthorized === true };
   try {
     validateUiEvidenceCommand(config.command);
+    if (config.syntheticDeveloperReviewAuthorized !== undefined && typeof config.syntheticDeveloperReviewAuthorized !== 'boolean') throw new Error('Invalid synthetic developer-review authorization');
     const repository = await realpath(context.repository);
     await mkdir(config.directory, { recursive: true });
     const root = await realpath(config.directory);
     if (root === repository || inside(repository, root)) throw new Error('UI evidence directory must be outside the target worktree');
     result.directory = await mkdtemp(join(root, `${context.taskId}-${context.attempt}-`));
     const fingerprint = await sourceFingerprint(repository);
+    const implementation = await implementationIdentity(repository);
     const started = Date.now();
     try {
       await exec(config.command.executable, config.command.args ?? [], {
         cwd: repository, shell: false, windowsHide: true, timeout: config.command.timeoutMs ?? 120_000, maxBuffer: 2 * 1024 * 1024,
         env: { ...process.env, FACTORY_UI_EVIDENCE_DIRECTORY: result.directory,
           FACTORY_TASK_ID: context.taskId, FACTORY_ATTEMPT: String(context.attempt),
-          FACTORY_SOURCE_FINGERPRINT: fingerprint }
+          FACTORY_SOURCE_FINGERPRINT: fingerprint,
+          FACTORY_UI_EVIDENCE_IMAGE_LINKS: '1' }
       });
     } catch {
       // Do not copy command arguments or stdout/stderr into persisted state.
       throw new Error('UI evidence collector command failed or timed out');
     }
     const ended = Date.now();
-    if (await sourceFingerprint(repository) !== fingerprint) throw new Error('Source changed during UI evidence collection');
+    if (await sourceFingerprint(repository) !== fingerprint || await implementationIdentity(repository) !== implementation) throw new Error('Source changed during UI evidence collection');
     const manifestPath = await realpath(join(result.directory, 'manifest.json'));
     if (!inside(result.directory, manifestPath)) throw new Error('Manifest escapes evidence directory');
     if ((await lstat(manifestPath)).size > 1_000_000) throw new Error('UI evidence manifest is too large');
@@ -113,6 +122,11 @@ export async function collectUiEvidence(config: UiEvidenceConfig, context: { rep
     for (const kind of ['screenshot', 'accessibility-tree']) {
       if (!manifest.artifacts.some(artifact => artifact.kind === kind)) throw new Error(`Missing ${kind} artifact`);
     }
+    for (const link of manifest.imageLinks ?? []) {
+      if (manifest.checks.filter(check => check.name === link.checkName).length !== 1) throw new Error('Image link must reference exactly one named check');
+      if (manifest.artifacts.filter(artifact => artifact.kind === 'screenshot' && artifact.path === link.screenshotPath).length !== 1) throw new Error('Image link must reference exactly one screenshot artifact');
+      if (!link.caption.trim() || /[\u0000-\u001f\u007f]/.test(link.caption)) throw new Error('Image caption must be plain text');
+    }
     const seen = new Set<string>();
     for (const artifact of manifest.artifacts) {
       if (isAbsolute(artifact.path) || win32.isAbsolute(artifact.path) || !inside(result.directory, resolve(result.directory, artifact.path))) throw new Error('Artifact path escapes evidence directory');
@@ -123,13 +137,16 @@ export async function collectUiEvidence(config: UiEvidenceConfig, context: { rep
       const stat = await lstat(path);
       if (!stat.isFile() || stat.size === 0 || stat.size > 20 * 1024 * 1024) throw new Error('Invalid or oversized UI evidence artifact');
       const bytes = await readFile(path);
+      let imageType: 'image/png' | 'image/jpeg' | undefined;
       if (artifact.kind === 'screenshot') {
         const png = bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
         const jpeg = bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255;
         if (!png && !jpeg) throw new Error('Screenshot must be a PNG or JPEG image');
+        imageType = png ? 'image/png' : 'image/jpeg';
       }
-      result.artifacts.push({ kind: artifact.kind, path, sha256: createHash('sha256').update(bytes).digest('hex') });
+      result.artifacts.push({ kind: artifact.kind, path, sha256: createHash('sha256').update(bytes).digest('hex'), ...(imageType ? { imageType } : {}) });
     }
+    result.implementationIdentity = implementation;
     result.passed = true;
   } catch (error) {
     // Avoid persisting collector stdout/stderr, which may contain sensitive app data.

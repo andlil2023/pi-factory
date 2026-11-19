@@ -34,6 +34,7 @@ import { parseSpecification, validateSpecification } from './spec-format.ts';
 import { createSpecificationStore } from './spec-store.ts';
 import { analyzeImpact } from './spec-impact.ts';
 import { reviewSpecification } from './spec-review.ts';
+import { implementationIdentity, validateVerificationCommands, type VerificationCommand } from './verification-observations.ts';
 
 interface Config {
   /** Optional specification agents fall back to planner and planReviewer/reviewer respectively. */
@@ -43,13 +44,13 @@ interface Config {
   planning?: { maxReviewRounds?: number };
   reviewers?: SpecialistReviewers;
   reviewRouting?: ReviewRouting;
-  uiEvidence?: { command: UiEvidenceCommand };
+  uiEvidence?: { command: UiEvidenceCommand; syntheticDeveloperReviewAuthorized?: boolean };
   /** `maxAutoReplans`: plan revisions the factory may apply without an operator per run; 0 always stops. Default 2.
    * `maxFinalRepairs`: repair tasks added after a failed final verification; 0 blocks at once. Default 2.
    * `maxIntegrationRepairs`: repair tasks added after a blocked integration; 0 disables repairs. Default 2.
    * `reuseVerification`: final verification and publication accept an earlier passing full verification of the identical content instead of rerunning it. Default true. */
   execution?: { maxAttempts?: number; maxInfraRetries?: number; verificationReruns?: number; maxAutoReplans?: number; maxFinalRepairs?: number; maxIntegrationRepairs?: number; reuseVerification?: boolean };
-  verification?: Array<{ executable: string; args?: string[]; timeoutMs?: number }>;
+  verification?: VerificationCommand[];
   verificationSelection?: SelectionConfig;
   /** Trusted commands that prepare every fresh run or integration worktree, for example a dependency install. */
   setup?: Array<{ executable: string; args?: string[]; timeoutMs?: number }>;
@@ -97,7 +98,7 @@ function assistantText(events:unknown[]):string {
   const fence=/^```(?:json)?\s*\n([\s\S]*?)\n```$/i.exec(last);
   return fence?fence[1].trim():last;
 }
-async function configFrom(flags:Record<string,string|boolean>):Promise<Config> {
+async function configFrom(flags:Record<string,string|boolean>, options:{doctor?:boolean}={}):Promise<Config> {
   const path=resolve(typeof flags.config==='string'?flags.config:join(root,'factory.config.json'));
   const config=JSON.parse(await readFile(path,'utf8')) as Config;
   if (!config.agents?.planner || !config.agents?.implementer || !config.agents?.reviewer) throw new Error('Configuration requires agents.planner, implementer and reviewer');
@@ -125,8 +126,10 @@ async function configFrom(flags:Record<string,string|boolean>):Promise<Config> {
   if (config.uiEvidence !== undefined) {
     if (!config.uiEvidence || !config.reviewers?.ui) throw new Error('uiEvidence requires an enabled UI reviewer');
     validateUiEvidenceCommand(config.uiEvidence.command);
+    if (config.uiEvidence.syntheticDeveloperReviewAuthorized !== undefined && typeof config.uiEvidence.syntheticDeveloperReviewAuthorized !== 'boolean') throw new Error('Invalid uiEvidence.syntheticDeveloperReviewAuthorized');
   }
   if (config.reviewRouting !== undefined && config.reviewRouting !== 'all' && config.reviewRouting !== 'task-specific') throw new Error('Invalid reviewRouting; use all or task-specific');
+  if (!options.doctor && config.verification !== undefined) validateVerificationCommands(config.verification);
   if (config.verificationSelection !== undefined) validateSelectionConfig(config.verificationSelection, config.verification);
   if (config.setup !== undefined && (!Array.isArray(config.setup) || config.setup.some(command => !command || typeof command.executable !== 'string' || !command.executable.trim()
     || (command.args !== undefined && (!Array.isArray(command.args) || command.args.some(arg => typeof arg !== 'string')))
@@ -151,7 +154,7 @@ async function doctorCommand(flags:Record<string,string|boolean>):Promise<void> 
   if (major<22 || (major===22 && minor<6)) blockers.push('Node: install Node 22.6 or newer with TypeScript stripping support.');
   if (!await executableAvailable('git')) blockers.push('Git: install Git and add it to PATH.');
   let config:Config | undefined;
-  try { config=await configFrom(flags); } catch { blockers.push('Configuration: provide a readable, valid configuration with --config and check its required fields.'); }
+  try { config=await configFrom(flags,{doctor:true}); } catch { blockers.push('Configuration: provide a readable, valid configuration with --config and check its required fields.'); }
   if (config) {
     if (config.specifications?.store === 'github' && !await executableAvailable('gh')) blockers.push('GitHub CLI: install gh and add it to PATH for the GitHub specification store.');
     try {
@@ -173,6 +176,9 @@ async function doctorCommand(flags:Record<string,string|boolean>):Promise<void> 
         if (!await executableAvailable(command.executable)) unavailable=true;
       }
       if (invalid) blockers.push(`${label}: configure valid executable, args and timeout values.`);
+      if (label === 'Verification' && !invalid) {
+        try { validateVerificationCommands(commands); } catch { blockers.push('Verification: configure valid, unique check names.'); }
+      }
       if (unavailable) warnings.push(`${label}: a configured executable is not available locally; install it or check the configuration (it may be provided by setup).`);
     }
   }
@@ -519,8 +525,9 @@ async function executeRun(store:StateStore,state:FactoryRunState,config:Config):
     piExecutable:launch.executable,piExecutableArgs:launch.executableArgs,
     implementer:config.agents.implementer,reviewer:config.agents.reviewer,reviewers:config.reviewers,reviewRouting:config.reviewRouting,
     verification:config.verification!,verificationSelection:config.verificationSelection,baselineCommit:git.expectedHead,
+    verificationContext:()=>({plan:state.plan,specification:state.specification?.sha256??null}),
     verificationReruns:config.execution?.verificationReruns??1,logDirectory:join(store.directory,runId,'logs'),
-    uiEvidence:config.uiEvidence ? { command:config.uiEvidence.command, directory:join(store.directory,runId,'ui-evidence') } : undefined};
+    uiEvidence:config.uiEvidence ? { ...config.uiEvidence, directory:join(store.directory,runId,'ui-evidence') } : undefined};
   const adapters=createAgentAdapters(adapterConfig);
   console.log(`Run ${runId}; worktree: ${worktree.path}`);
   // Git checkpoints create a fresh baseline for subsequent tasks.
@@ -542,6 +549,7 @@ async function executeRun(store:StateStore,state:FactoryRunState,config:Config):
       git.expectedHead = checkpoint.commit;
       return { commit: checkpoint.commit };
     },
+    reportImplementationIdentity: () => implementationIdentity(worktree.path),
     finalVerify: async (onProgress: NonNullable<TaskContext['onVerificationProgress']>) => {
       // Every trusted command against the final committed worktree, whatever the tasks selected.
       await assertRunCheckpoint(state);
@@ -645,8 +653,9 @@ async function integrateCommand(flags:Record<string,string|boolean>):Promise<voi
           implementer:config.agents.implementer,reviewer:config.agents.reviewer,reviewers:config.reviewers,reviewRouting:config.reviewRouting,
           // Integration preparation and publication must never use task-level selection.
           verification:config.verification!,baselineCommit:baseline,
+          verificationContext:()=>({plan:state.plan,specification:state.specification?.sha256??null}),
           verificationReruns:config.execution?.verificationReruns??1,logDirectory:join(store.directory,runId,'integration-logs',String(attempt)),
-          uiEvidence:config.uiEvidence?{command:config.uiEvidence.command,directory:join(store.directory,runId,'integration-evidence',String(attempt))}:undefined})
+          uiEvidence:config.uiEvidence?{...config.uiEvidence,directory:join(store.directory,runId,'integration-evidence',String(attempt))}:undefined})
       };
       let record=flags.publish===true
         ? await (await hasGitRemote(repository) ? publishPullRequest : publishIntegration)(store,state,options,required(flags,'candidate'))
