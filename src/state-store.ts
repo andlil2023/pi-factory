@@ -88,6 +88,15 @@ export interface IntegrationAttempt {
   pullRequest?: { repository: string; remote: string; pushUrl: string; base: string; baseSha: string; head: string; headSha: string; url?: string; mergeCommit?: string };
 }
 
+export interface RunSpecification {
+  store: 'local' | 'github';
+  id: string;
+  url?: string;
+  sha256: string;
+  fetchedAt: string;
+  text: string;
+}
+
 export interface FactoryRunState {
   version: 1;
   runId: string;
@@ -96,6 +105,7 @@ export interface FactoryRunState {
   updatedAt: string;
   status: 'planned' | 'running' | 'paused' | 'completed' | 'blocked';
   plan: unknown;
+  specification?: RunSpecification;
   git?: GitExecutionState;
   execution?: ExecutionPolicy;
   integrations?: IntegrationAttempt[];
@@ -156,7 +166,7 @@ export class StateStore {
     return join(this.directory, `${runId}.json`);
   }
 
-  async create(repository: string, plan: unknown, taskIds: string[], runId: string = randomUUID(), metadata: { git?: GitExecutionState; execution?: ExecutionPolicy } = {}): Promise<FactoryRunState> {
+  async create(repository: string, plan: unknown, taskIds: string[], runId: string = randomUUID(), metadata: { git?: GitExecutionState; execution?: ExecutionPolicy; specification?: RunSpecification } = {}): Promise<FactoryRunState> {
     assertRunId(runId);
     if (new Set(taskIds).size !== taskIds.length || taskIds.length === 0) throw new Error('Task IDs must be unique and nonempty');
     const now = new Date().toISOString();
