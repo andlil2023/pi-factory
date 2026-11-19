@@ -18,7 +18,7 @@ function filesUnder(dir: string): string[] {
 test('npm package contains runtime and assets but not local configuration or run data', () => {
   const temp = mkdtempSync(join(tmpdir(), 'pi-factory-pack-'));
   try {
-    for (const path of ['package.json', 'package-lock.json', 'AGENTS.md', 'README.md', 'bin', 'src', 'agents', 'contracts', 'examples', 'factory.config.example.json', '.pi/skills']) {
+    for (const path of ['package.json', 'package-lock.json', 'AGENTS.md', 'README.md', 'bin', 'src', 'agents', 'contracts', 'examples', 'templates', 'factory.config.example.json', '.pi/skills']) {
       const destination = join(temp, path);
       mkdirSync(resolve(destination, '..'), { recursive: true });
       cpSync(join(root, path), destination, { recursive: true });
@@ -47,7 +47,7 @@ test('npm package contains runtime and assets but not local configuration or run
         assert.ok(paths.has(path), `missing ${path}`);
       }
     }
-    for (const path of ['bin/pi-factory.js', 'AGENTS.md', 'factory.config.example.json', 'examples/objective.md', 'package.json']) assert.ok(paths.has(path), `missing ${path}`);
+    for (const path of ['bin/pi-factory.js', 'AGENTS.md', 'factory.config.example.json', 'examples/objective.md', 'templates/specification.md', 'package.json']) assert.ok(paths.has(path), `missing ${path}`);
     for (const path of ['factory.config.json', '.env', '.npmrc', '.factory/config.json', '.factory/runs/run-1/state.json', '.pi/settings.json', 'src/credentials.json']) assert.ok(!paths.has(path), `unexpected ${path}`);
     const installDir = join(temp, 'consumer');
     mkdirSync(installDir);

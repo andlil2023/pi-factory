@@ -17,6 +17,7 @@
     "agents/*.md",
     "contracts/*.json",
     "examples/objective.md",
+    "templates/specification.md",
     "factory.config.example.json",
     ".pi/skills/*/SKILL.md",
     "AGENTS.md"
