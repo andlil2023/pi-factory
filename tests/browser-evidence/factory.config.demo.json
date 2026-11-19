@@ -1,0 +1,22 @@
+{
+  "agents": {
+    "planner": { "provider": "openai", "model": "REPLACE_WITH_PI_MODEL_ID" },
+    "implementer": { "provider": "openai", "model": "REPLACE_WITH_PI_MODEL_ID" },
+    "reviewer": { "provider": "openai", "model": "REPLACE_WITH_PI_MODEL_ID" }
+  },
+  "reviewRouting": "task-specific",
+  "reviewers": {
+    "ui": { "provider": "openai", "model": "REPLACE_WITH_PI_MODEL_ID" }
+  },
+  "uiEvidence": {
+    "command": {
+      "executable": "node",
+      "args": ["--experimental-strip-types", "tests/browser-evidence/collect-dashboard.ts"],
+      "timeoutMs": 180000
+    },
+    "syntheticDeveloperReviewAuthorized": true
+  },
+  "verification": [
+    { "name": "dashboard-ui", "executable": "node", "args": ["--experimental-strip-types", "--test", "tests/dashboard-ui.test.ts"], "timeoutMs": 120000 }
+  ]
+}

@@ -107,6 +107,42 @@ function disclosure(title, key, openKeys) {
   element.append(node('summary', title));
   return element;
 }
+function renderReport(report, screenshots, runId) {
+  const section = node('section', undefined, 'evidence-report');
+  section.append(node('h3', 'Evidence report'), node('p', report.summary, 'report-summary'),
+    node('p', `Verification outcome: ${report.verification}`), node('h3', 'Gaps'));
+  if (report.gaps.length) {
+    const gaps = node('ul');
+    for (const gap of report.gaps) gaps.append(node('li', gap));
+    section.append(gaps);
+  } else section.append(node('p', 'No gaps recorded.'));
+  section.append(node('h3', 'Criterion results', 'subheading'));
+  for (const criterion of report.criteria) {
+    const card = node('div', undefined, 'report-criterion');
+    card.append(node('h3', `${criterion.taskId} · Criterion ${criterion.criterion + 1}`),
+      badge(criterion.status === 'demonstrated' ? 'passed' : criterion.status, criterion.status),
+      node('p', `Expected: ${criterion.expected}`), node('p', `Observed: ${criterion.observed}`));
+    const evidence = node('ul');
+    for (const item of criterion.evidence) evidence.append(node('li', item));
+    card.append(node('p', 'Evidence:'), evidence);
+    const images = (screenshots || []).filter(image => image.taskId === criterion.taskId && image.criterion === criterion.criterion &&
+      typeof image.caption === 'string' && typeof image.url === 'string' &&
+      image.url.startsWith(`/api/runs/${runId}/screenshots/`) &&
+      /^\/api\/runs\/[a-zA-Z0-9_-]+\/screenshots\/[a-zA-Z0-9_-]+\/(0|[1-9]\d*)\/(0|[1-9]\d*)$/.test(image.url));
+    if (!images.length) card.append(node('p', 'Screenshot unavailable.', 'task-meta'));
+    for (const image of images) {
+      const figure = node('figure', undefined, 'report-image');
+      const picture = node('img');
+      picture.alt = image.caption;
+      picture.addEventListener('error', () => { figure.replaceChildren(node('p', 'Screenshot unavailable.', 'task-meta'), node('figcaption', image.caption)); });
+      picture.src = image.url;
+      figure.append(picture, node('figcaption', image.caption));
+      card.append(figure);
+    }
+    section.append(card);
+  }
+  return section;
+}
 function renderTask(task, maxAttempts, openKeys, key = task.id) {
   const card = node('article', undefined, 'task-card');
   const heading = node('div', undefined, 'task-heading');
@@ -197,25 +233,37 @@ async function refresh() {
 }
 function showDetails(entry) {
   liveTimings = [];
-  const details = $('details');
+  const root = $('details');
+  let details = root;
   const openKeys = new Set(Array.from(details.querySelectorAll('details[open]'), item => item.dataset.key));
   const focusedDisclosure = Array.from(details.querySelectorAll('details')).find(item => item.firstElementChild === document.activeElement);
   const focusedKey = focusedDisclosure?.dataset.key;
   const restoreDisclosureFocus = () => {
     if (focusedKey === undefined) return;
-    const target = Array.from(details.querySelectorAll('details')).find(item => item.dataset.key === focusedKey);
+    const target = Array.from(root.querySelectorAll('details')).find(item => item.dataset.key === focusedKey);
     (target?.firstElementChild || $('refresh')).focus({ preventScroll: true });
   };
   details.replaceChildren();
   $('detail-heading').textContent = entry.available && entry.run?.label || entry.runId;
   details.append(node('p', entry.runId, 'display-id'));
   if (!entry.available) {
+    if ($('activity-panel')) $('activity-panel').hidden = false;
     $('detail-status').textContent = 'Run unavailable';
     details.append(node('div', 'This run’s persisted state is missing or unreadable. Try refreshing.', 'empty-state'));
     restoreDisclosureFocus();
     return;
   }
   const run = entry.run;
+  // Lifecycle narratives are not part of the report viewing experience.
+  if ($('activity-panel')) $('activity-panel').hidden = Boolean(run.evidenceReport);
+  if (run.evidenceReport) {
+    details.append(renderReport(run.evidenceReport, run.screenshots, entry.runId));
+    const supporting = disclosure('Supporting run details', 'supporting', openKeys);
+    details.append(supporting);
+    details = supporting;
+  } else {
+    details.append(node('p', 'Current evidence report unavailable.', 'task-meta'));
+  }
   const tasks = run.tasks || [];
   const completed = tasks.filter(task => task.status === 'completed').length;
   const active = tasks.filter(task => ['running', 'needs_review', 'repair_pending'].includes(task.status)).length;
@@ -319,6 +367,8 @@ function selectRun(id) {
   for (const button of $('runs').querySelectorAll('button')) button.setAttribute('aria-pressed', String(button.dataset.runId === id));
   if (stream) stream.close();
   $('details').replaceChildren(); $('timeline').replaceChildren();
+  // Do not reveal events before knowing whether this run has a report.
+  if ($('activity-panel')) $('activity-panel').hidden = true;
   $('detail-heading').textContent = id;
   $('detail-status').textContent = 'Loading run details…';
   $('connection').textContent = 'Connecting to live updates…';

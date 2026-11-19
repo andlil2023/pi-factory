@@ -1,4 +1,5 @@
 import type { FactoryEventBus } from './event-bus.ts';
+import { buildEvidenceReport } from './evidence-report.ts';
 import { AgentExecutionError } from './agent-error.ts';
 import { appendReviewResult, reconcileReviewResults } from './review-results.ts';
 import type { ReviewSelection } from './review-routing.ts';
@@ -12,6 +13,8 @@ export interface PlannedTask {
   objective: string;
   scope: string;
   acceptanceCriteria: string[];
+  /** Explicit zero-based criterion to configured check mappings; absent means unsupported. */
+  criterionChecks?: Array<{ criterion: number; checks: string[] }>;
   dependencies: string[];
   verification: string[];
 }
@@ -71,6 +74,8 @@ export interface OrchestratorAdapters {
   review(context: TaskContext, implementation: ImplementationResult, verification: VerificationResult, onReview?: ReviewProgress): Promise<ReviewResult[]>;
   checkpoint?(context: TaskContext): Promise<{ commit: string }>;
   finalVerify?(onProgress: (progress: VerificationProgress) => Promise<void>): Promise<VerificationResult>;
+  /** Current candidate tree, independently established after verification. */
+  reportImplementationIdentity?(): Promise<string>;
   /** Whether the worktree differs from the last checkpoint. Lets a final repair that changed nothing be withdrawn. */
   hasChanges?(context: TaskContext): Promise<boolean>;
 }
@@ -121,6 +126,7 @@ export class Orchestrator {
     if (Object.values(state.tasks).some(t => t.status === 'running' || t.status === 'needs_review')) throw new Error('Interrupted run requires recovery before execution');
     this.options.events?.emit({type:'RUN_STARTED'});
     state.status = 'running';
+    delete state.evidenceReport;
     await this.store.save(state);
     while (true) {
       const remaining = tasks.filter(t => state.tasks[t.id].status !== 'completed');
@@ -140,6 +146,10 @@ export class Orchestrator {
               await this.store.save(state);
             });
             state.finalVerification = { ...final, checkedAt: new Date().toISOString() };
+            if (this.adapters.reportImplementationIdentity) {
+              const implementation = await this.adapters.reportImplementationIdentity().catch(() => null);
+              state.evidenceReport = buildEvidenceReport(state, implementation);
+            }
             state.finalVerificationProgress.status = final.passed ? 'passed' : 'failed';
             delete state.finalVerificationProgress.currentCheck;
             this.options.events?.emit({type: final.passed ? 'FINAL_VERIFICATION_PASSED' : 'FINAL_VERIFICATION_FAILED'});
@@ -148,6 +158,7 @@ export class Orchestrator {
               // The combined result failed although every task was accepted: give it the same repair path as a task failure.
               const now = new Date().toISOString();
               const task = finalRepairTask(state, tasks);
+              delete state.evidenceReport;
               state.planRevisions = [...(state.planRevisions ?? []), { replacedAt: now, plan: structuredClone(state.plan) }];
               const planned = (state.plan as { tasks?: unknown } | null)?.tasks;
               if (Array.isArray(planned) && planned !== tasks) planned.push(structuredClone(task));
@@ -169,6 +180,10 @@ export class Orchestrator {
             state.finalVerificationProgress!.status = 'failed';
             delete state.finalVerificationProgress!.currentCheck;
             state.finalVerification = { passed: false, details: String(error), checkedAt: new Date().toISOString() };
+            if (this.adapters.reportImplementationIdentity) {
+              const implementation = await this.adapters.reportImplementationIdentity().catch(() => null);
+              state.evidenceReport = buildEvidenceReport(state, implementation);
+            }
             state.status = 'blocked';
             this.options.events?.emit({type:'FINAL_VERIFICATION_FAILED',message:String(error)});
             this.options.events?.emit({type:'RUN_BLOCKED',message:'Final verification error'});
