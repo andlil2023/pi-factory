@@ -34,7 +34,7 @@ import { parseSpecification, validateSpecification } from './spec-format.ts';
 import { createSpecificationStore } from './spec-store.ts';
 import { analyzeImpact } from './spec-impact.ts';
 import { reviewSpecification } from './spec-review.ts';
-import { validateVerificationCommands, type VerificationCommand } from './verification-observations.ts';
+import { implementationIdentity, validateVerificationCommands, type VerificationCommand } from './verification-observations.ts';
 
 interface Config {
   /** Optional specification agents fall back to planner and planReviewer/reviewer respectively. */
@@ -549,6 +549,7 @@ async function executeRun(store:StateStore,state:FactoryRunState,config:Config):
       git.expectedHead = checkpoint.commit;
       return { commit: checkpoint.commit };
     },
+    reportImplementationIdentity: () => implementationIdentity(worktree.path),
     finalVerify: async (onProgress: NonNullable<TaskContext['onVerificationProgress']>) => {
       // Every trusted command against the final committed worktree, whatever the tasks selected.
       await assertRunCheckpoint(state);
