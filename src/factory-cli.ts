@@ -3,7 +3,7 @@ import { FactoryEventBus } from './event-bus.ts';
 import { readFile, writeFile, mkdir, realpath, access, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { runPi } from './pi-runner.ts';
 import { ContractValidator } from './contract-validator.ts';
 import { createWorktree } from './git-worktree.ts';
@@ -272,6 +272,40 @@ async function runSetup(worktree:string,config:Config):Promise<void> {
     const outcome=await runVerificationCommand(worktree,{timeoutMs:600000,...command});
     if (!outcome.passed) throw new Error(`Setup command failed in ${worktree}: ${outcome.command}\n${(outcome.stderr||outcome.stdout).slice(-2000)}`);
   }
+}
+
+async function startCommand(flags:Record<string,string|boolean>):Promise<void> {
+  if (flags.approve !== true) throw new Error('Starting a run requires --approve to consent to the specification');
+  const repository=resolve(required(flags,'repo'));
+  const id=required(flags,'spec');
+  const config=await configFrom(flags);
+  if (!config.verification?.length) throw new Error('Configure at least one trusted verification command in factory.config.json');
+  if ((config.planning?.maxReviewRounds ?? 2) === 0) throw new Error('Starting requires planning.maxReviewRounds greater than zero');
+  const store=await createSpecificationStore(config.specifications,repository);
+  const specification=await store.fetch(id);
+  const issues=validateSpecification(specification.text);
+  if (issues.length) {
+    for (const issue of issues) console.log(`${issue.section}: ${issue.message}`);
+    process.exitCode=1;
+    return;
+  }
+  const startable=await store.startable(id);
+  if (!startable.ok) throw new Error(`Specification is not startable: ${startable.reason}`);
+  const hash=createHash('sha256').update(specification.text,'utf8').digest('hex');
+  if (store.kind === 'github' && flags.sha256 === undefined) {
+    const command=['pi-factory','start','--repo',repository,
+      ...(typeof flags.config === 'string' ? ['--config',resolve(flags.config)] : []),
+      '--spec',id,'--sha256',hash,...(flags['new-run'] === true ? ['--new-run'] : []),'--approve'];
+    console.log(`Title: ${specification.title}\nURL: ${specification.url}\nUpdated: ${specification.updatedAt}\nSHA-256: ${hash}`);
+    console.log(`Next command: ${command.map((arg,i)=>i === 0 || /^--[a-z0-9-]+$/.test(arg) ? arg : JSON.stringify(arg)).join(' ')}`);
+    return;
+  }
+  if (flags.sha256 !== undefined) {
+    const supplied=required(flags,'sha256');
+    if (supplied !== hash) throw new Error(`Specification SHA-256 mismatch: supplied ${supplied}; fetched ${hash}`);
+  }
+  // Planning and execution are added by subsequent tasks; never create a run here.
+  throw new Error('Start preflight passed; planning and execution are not yet available');
 }
 
 async function runCommand(flags:Record<string,string|boolean>):Promise<void> {
@@ -703,6 +737,7 @@ async function main():Promise<void> {
   }
   if(command==='doctor') return doctorCommand(flags);
   if(command==='plan') return planCommand(flags);
+  if(command==='start') return startCommand(flags);
   if(command==='run') return runCommand(flags);
   if(command==='status') return statusCommand(flags);
   if(command==='run-list') return listCommand(flags);
@@ -710,7 +745,7 @@ async function main():Promise<void> {
   if(command==='replan') return replanCommand(flags);
   if(command==='amend') return amendCommand(flags);
   if(command==='integrate') return integrateCommand(flags);
-  console.log('Usage:\n  pi-factory spec check --spec FILE\n  pi-factory spec publish --repo PATH --config FILE --spec FILE --approve\n  pi-factory init --repo PATH [--force]\n  pi-factory dashboard --repo PATH [--port PORT]\n  pi-factory doctor [--config FILE] [--repo PATH]\n  pi-factory run-list --repo PATH\n  pi-factory plan --repo PATH --config FILE --objective FILE --output FILE\n  pi-factory run --repo PATH --config FILE --plan FILE --approve\n  pi-factory status --repo PATH --run RUN_ID\n  pi-factory resume --repo PATH --config FILE --run RUN_ID --approve [--retry-task TASK_ID [--guidance FILE]] [--recover-lock]\n  pi-factory replan --repo PATH --config FILE --run RUN_ID --output FILE [--guidance FILE]\n  pi-factory amend --repo PATH --run RUN_ID --plan FILE --approve\n  pi-factory integrate --repo PATH --config FILE --run RUN_ID --approve [--new-attempt] [--guidance FILE]\n  pi-factory integrate --repo PATH --config FILE --run RUN_ID --publish --candidate SHA --approve\n  pi-factory integrate --repo PATH --run RUN_ID --reconcile [--recover-lock]');
+  console.log('Usage:\n  pi-factory spec check --spec FILE\n  pi-factory spec publish --repo PATH --config FILE --spec FILE --approve\n  pi-factory init --repo PATH [--force]\n  pi-factory dashboard --repo PATH [--port PORT]\n  pi-factory doctor [--config FILE] [--repo PATH]\n  pi-factory run-list --repo PATH\n  pi-factory plan --repo PATH --config FILE --objective FILE --output FILE\n  pi-factory run --repo PATH --config FILE --plan FILE --approve\n  pi-factory start --repo PATH --config FILE --spec REF [--sha256 HASH] [--new-run] --approve\n  pi-factory status --repo PATH --run RUN_ID\n  pi-factory resume --repo PATH --config FILE --run RUN_ID --approve [--retry-task TASK_ID [--guidance FILE]] [--recover-lock]\n  pi-factory replan --repo PATH --config FILE --run RUN_ID --output FILE [--guidance FILE]\n  pi-factory amend --repo PATH --run RUN_ID --plan FILE --approve\n  pi-factory integrate --repo PATH --config FILE --run RUN_ID --approve [--new-attempt] [--guidance FILE]\n  pi-factory integrate --repo PATH --config FILE --run RUN_ID --publish --candidate SHA --approve\n  pi-factory integrate --repo PATH --run RUN_ID --reconcile [--recover-lock]');
   if(command && command !== '--help' && command !== 'help') process.exitCode=1;
 }
 main().catch(e=>{console.error(e instanceof Error?e.stack:e);process.exitCode=1;});
