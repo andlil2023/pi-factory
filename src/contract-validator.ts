@@ -89,7 +89,7 @@ export class ContractValidator {
   }
 }
 
-type Task = { id: string; dependencies: string[]; acceptanceCriteria: string[] };
+type Task = { id: string; dependencies: string[]; acceptanceCriteria: string[]; criterionChecks?: Array<{ criterion: number; checks: string[] }> }; 
 type Decision = { affectedTasks: string[] };
 type Plan = { tasks: Task[]; decisions: Decision[] };
 type Implementation = { taskId: string; outcome: string; blockers: { kind: string; question?: string; proposedSplit?: string[] }[] };
@@ -119,6 +119,12 @@ function validateSemantics(
       ids.add(task.id);
     }
     for (const [index, task] of plan.tasks.entries()) {
+      const mapped = new Set<number>();
+      for (const [mappingIndex, mapping] of (task.criterionChecks ?? []).entries()) {
+        if (mapping.criterion >= task.acceptanceCriteria.length) add(`/tasks/${index}/criterionChecks/${mappingIndex}/criterion`, 'Criterion index is out of range');
+        if (mapped.has(mapping.criterion)) add(`/tasks/${index}/criterionChecks/${mappingIndex}/criterion`, 'Duplicate criterion mapping');
+        mapped.add(mapping.criterion);
+      }
       for (const dep of task.dependencies) {
         if (!ids.has(dep)) add(`/tasks/${index}/dependencies`, `Unknown dependency: ${dep}`);
         if (dep === task.id) add(`/tasks/${index}/dependencies`, "Task cannot depend on itself");

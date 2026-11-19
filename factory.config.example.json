@@ -55,6 +55,7 @@
   ],
   "verification": [
     {
+      "name": "typecheck",
       "executable": "node",
       "args": [
         "node_modules/typescript/bin/tsc",

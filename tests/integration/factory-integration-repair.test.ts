@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { FactoryRunState } from '../../src/state-store.ts';
 import { addIntegrationRepair } from '../../src/integration-repair.ts';
+import { planIdentity, type NamedObservation } from '../../src/verification-observations.ts';
 import { assertSubprocessStarted, subprocessDiagnostics } from '../subprocess-diagnostics.ts';
 
 for (const [mode, budget] of [['once', 1], ['once', 0], ['always', 1], ['incomplete', 1], ['withdraw', 1], ['dirty', 1]] as const) {
@@ -20,11 +21,15 @@ for (const [mode, budget] of [['once', 1], ['once', 0], ['always', 1], ['incompl
     const plan=join(dir,'plan.json');
     await writeFile(plan,JSON.stringify({objective:'Fixture',assumptions:[],decisions:[],verification:['test'],tasks:[{id:'T001',title:'Task',objective:'Write file',scope:'T001.txt',acceptanceCriteria:['File exists'],dependencies:[],verification:['test']}]}));
     const config=join(dir,'config.json'); const model={provider:'fixture',model:'fixture'};
-    await writeFile(config,JSON.stringify({agents:{planner:model,implementer:model,reviewer:model},execution:{maxAttempts:3,maxIntegrationRepairs:budget},verification:[{executable:process.execPath,args:['-e',mode==='dirty' ? "if(process.cwd().includes('attempt-')){require('fs').writeFileSync('T001.txt','changed by a check');process.exit(1)}" : 'process.exit(0)']}],pi:{executable:process.execPath,executableArgs:[resolve('tests/fixtures/fake-integration-repair-agent.mjs'),mode]}}));
+    await writeFile(config,JSON.stringify({agents:{planner:model,implementer:model,reviewer:model},execution:{maxAttempts:3,maxIntegrationRepairs:budget,reuseVerification:false},verification:[{name:'integration-check',executable:process.execPath,args:['-e',mode==='dirty' ? "if(process.cwd().includes('attempt-')){require('fs').writeFileSync('T001.txt','changed by a check');process.exit(1)}" : 'process.exit(0)']}],pi:{executable:process.execPath,executableArgs:[resolve('tests/fixtures/fake-integration-repair-agent.mjs'),mode]}}));
     const cli=(...args:string[])=>{const result=spawnSync(process.execPath,['--experimental-strip-types',resolve('src/factory-cli.ts'),...args,'--config',config],{encoding:'utf8',timeout:120000}); assertSubprocessStarted(result); return result;};
     const run=cli('run','--repo',repo,'--plan',plan,'--approve'); assert.equal(run.status,0,subprocessDiagnostics(run));
     const runs=join(repo,'.factory','runs'); const path=join(runs,(await readdir(runs)).find(name=>name.endsWith('.json'))!);
     const before=JSON.parse(await readFile(path,'utf8')) as FactoryRunState;
+    if (mode==='once' && budget===1) {
+      before.specification={store:'local',id:'fixture',sha256:'fixture-spec-hash',fetchedAt:new Date().toISOString(),text:'Fixture specification'};
+      await writeFile(path,JSON.stringify(before,null,2)+'\n');
+    }
     const result=cli('integrate','--repo',repo,'--run',before.runId,'--approve');
     assert.equal(result.status,mode==='once' && budget===1 ? 0 : 1,subprocessDiagnostics(result));
     const state=JSON.parse(await readFile(path,'utf8')) as FactoryRunState;
@@ -41,6 +46,15 @@ for (const [mode, budget] of [['once', 1], ['once', 0], ['always', 1], ['incompl
       const candidate=state.integrations![1]; assert.equal(candidate.status,'ready');
       assert.equal(git('rev-list','--parents','-n','1',candidate.commit!).split(' ')[2],state.git!.expectedHead);
       assert.notEqual(state.git!.expectedHead,before.git!.expectedHead);
+      const observation = (verification: {details:unknown} | undefined) => (verification!.details as {observations:NamedObservation[]}).observations;
+      const expected = (attempt: typeof candidate, plan: unknown) => [{name:'integration-check',passed:true,identity:{plan:planIdentity(plan),specification:'fixture-spec-hash',implementation:git('-C',attempt.worktree,'rev-parse','HEAD^{tree}')}}];
+      assert.deepEqual(observation(state.integrations![0].verification),expected(state.integrations![0],before.plan));
+      assert.notEqual(planIdentity(state.plan),planIdentity(before.plan));
+      assert.deepEqual(observation(candidate.verification),expected(candidate,state.plan));
+      const published=cli('integrate','--repo',repo,'--run',before.runId,'--approve','--publish','--candidate',candidate.commit!);
+      assert.equal(published.status,0,subprocessDiagnostics(published));
+      const after=JSON.parse(await readFile(path,'utf8')) as FactoryRunState;
+      assert.deepEqual(observation(after.integrations![1].publicationVerification),expected(candidate,state.plan));
     }
     if (mode==='once' && budget===0) {
       const settings=JSON.parse(await readFile(config,'utf8'));

@@ -26,14 +26,15 @@ export interface ReviewedPlan {
 }
 
 /** What the factory can actually check. Planner and plan reviewer use it to keep criteria verifiable. */
-export function planningContext(config: { verification?: Array<{ executable: string; args?: string[]; timeoutMs?: number }>; uiEvidence?: unknown }): string {
-  const commands = (config.verification ?? []).map(command => `- ${[command.executable, ...(command.args ?? [])].join(' ')}`);
+export function planningContext(config: { verification?: Array<{ executable: string; args?: string[]; timeoutMs?: number; name?: string }>; uiEvidence?: unknown }): string {
+  const commands = (config.verification ?? []).map(command => `- ${command.name ? `[named: ${command.name}] ` : ''}${[command.executable, ...(command.args ?? [])].join(' ')}`);
   return [
     'Factory verification environment (trusted configuration, not part of the objective):',
     commands.length ? `The factory accepts a task only when these commands pass in the run worktree:\n${commands.join('\n')}` : 'No trusted verification commands are configured.',
     config.uiEvidence
       ? 'A rendered UI evidence collector is configured: UI tasks get screenshots and interaction checks.'
       : 'No rendered UI evidence collector is configured: UI changes are reviewed from source only. Do not write acceptance criteria that need screenshots, visual inspection, or manual interaction.',
+    'Map each criterion to applicable trusted named checks using criterionChecks (zero-based criterion index and checks array). Only map checks that actually test that criterion; leave unsupported criteria unmapped. Never infer a named check from an unnamed suite.',
     'Reviewers read code and these results; they cannot run commands. Acceptance criteria must be checkable by these commands (including tests the implementer adds) or by reading the code.'
   ].join('\n');
 }

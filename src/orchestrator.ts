@@ -12,6 +12,8 @@ export interface PlannedTask {
   objective: string;
   scope: string;
   acceptanceCriteria: string[];
+  /** Explicit zero-based criterion to configured check mappings; absent means unsupported. */
+  criterionChecks?: Array<{ criterion: number; checks: string[] }>;
   dependencies: string[];
   verification: string[];
 }
