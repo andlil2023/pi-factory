@@ -25,12 +25,25 @@ const validReview = () => ({
   taskId: 'T001', reviewer: 'code', verdict: 'approved', summary: 'No blocking issues', findings: [], limitations: [],
 });
 
-async function expectInvalid(contract: 'plan' | 'implementation' | 'review' | 'impact', value: unknown, stage: 'json' | 'schema' | 'semantic', fragment?: string) {
+async function expectInvalid(contract: 'plan' | 'implementation' | 'review' | 'impact' | 'spec-review', value: unknown, stage: 'json' | 'schema' | 'semantic', fragment?: string) {
   const result = await validator.validate(contract, value);
   assert.equal(result.valid, false, 'Expected invalid contract');
   if (result.valid) return;
   assert.ok(result.issues.some(i => i.stage === stage && (!fragment || i.message.includes(fragment))), JSON.stringify(result.issues));
 }
+
+test('validates specification review findings and rejects malformed replies', async () => {
+  const finding = { category: 'spec_gap', section: 'Requirements', description: 'A decision is open', question: 'Which behavior is required?' };
+  for (const value of [{ findings: [] }, { findings: [finding, { ...finding, category: 'unverifiable' }] }]) {
+    assert.equal((await validator.validate('spec-review', JSON.stringify(value))).valid, true);
+  }
+  await expectInvalid('spec-review', '{bad-json', 'json');
+  for (const value of [null, [], {}, { findings: null }, { findings: [], extra: true },
+    { findings: [{ ...finding, category: 'other' }] }, { findings: [{ ...finding, extra: true }] },
+    ...Object.keys(finding).map(key => ({ findings: [Object.fromEntries(Object.entries(finding).filter(([name]) => name !== key))] })),
+    ...['section', 'description', 'question'].flatMap(key => [{ findings: [{ ...finding, [key]: '' }] }, { findings: [{ ...finding, [key]: 42 }] }]),
+  ]) await expectInvalid('spec-review', value, 'schema');
+});
 
 test('validates impact structure and permits nonexistent relative paths', async () => {
   const impact = { affectedModules: [{ path: 'not-yet-created/module.ts', change: 'The module may change.' }, { path: 'future\\module', change: 'Another area may change' }], consequences: ['Tests may need updates.'] };

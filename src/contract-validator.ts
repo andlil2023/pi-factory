@@ -5,7 +5,7 @@ import type { ErrorObject, ValidateFunction } from "ajv";
 import { readFile } from "node:fs/promises";
 import { posix, resolve, win32 } from "node:path";
 
-export type ContractName = "plan" | "plan-review" | "implementation" | "review" | "ui-evidence" | "impact";
+export type ContractName = "plan" | "plan-review" | "implementation" | "review" | "ui-evidence" | "impact" | "spec-review";
 export type ValidationIssue = {
   stage: "json" | "schema" | "semantic";
   path: string;
@@ -22,6 +22,7 @@ const CONTRACTS: Record<ContractName, string> = {
   review: "review.schema.json",
   "ui-evidence": "ui-evidence.schema.json",
   impact: "impact.schema.json",
+  "spec-review": "spec-review.schema.json",
 };
 
 /** Task size gate for new and amended plans: one task must fit one implementer session. */
