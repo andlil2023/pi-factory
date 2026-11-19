@@ -151,6 +151,7 @@ async function doctorCommand(flags:Record<string,string|boolean>):Promise<void> 
   let config:Config | undefined;
   try { config=await configFrom(flags); } catch { blockers.push('Configuration: provide a readable, valid configuration with --config and check its required fields.'); }
   if (config) {
+    if (config.specifications?.store === 'github' && !await executableAvailable('gh')) blockers.push('GitHub CLI: install gh and add it to PATH for the GitHub specification store.');
     try {
       const launch=piLaunch(config);
       let available=await executableAvailable(launch.executable);
@@ -676,7 +677,7 @@ async function main():Promise<void> {
     if (validateSpecification(text).some(issue => issue.section === 'Open questions')) console.warn('Warning: Open questions are unresolved.');
     if (!parsed.hasImpactAnalysis) console.warn('Warning: Impact analysis is missing.');
     const saved=await store.save(parsed.title,text);
-    console.log(`Specification published: ${saved.url ?? saved.id}`);
+    console.log(`Specification published: ${saved.url ? `${saved.id} ${saved.url}` : saved.id}`);
     return;
   }
   const {command,flags}=argsMap(argv);

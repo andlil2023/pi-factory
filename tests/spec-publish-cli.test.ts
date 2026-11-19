@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { delimiter, join, resolve } from 'node:path';
 
 const cli = (...args: string[]) => spawnSync(process.execPath, ['--experimental-strip-types', resolve('src/factory-cli.ts'), ...args], { encoding: 'utf8' });
 const valid = '# Example specification\n\n## What\nSomething\n## Why\nReason\n## Acceptance criteria\n- Works\n## Out of scope\nOther\n## Threat model\nNone\n## Open questions\nNone\n## Impact analysis\nNone\n';
@@ -61,7 +61,37 @@ test('readiness exceptions warn independently, but empty or duplicate questions 
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
-test('GitHub store reports that publication is not available yet', async () => {
+test('approved GitHub publication creates an issue and prints its number and URL', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'spec-publish-gh-'));
+  try {
+    const draft = join(dir, 'draft.md');
+    const config = join(dir, 'config.json');
+    const calls = join(dir, 'calls.json');
+    // The shell-free runner executes Node as gh; the first argument is this local script.
+    await writeFile(join(dir, 'issue'), `const fs = require('node:fs');\nlet input = '';\nprocess.stdin.setEncoding('utf8');\nprocess.stdin.on('data', chunk => input += chunk);\nprocess.stdin.on('end', () => { fs.writeFileSync(${JSON.stringify(calls)}, JSON.stringify({ args: process.argv.slice(2), input })); console.log('https://github.com/owner/repo/issues/42'); });\n`);
+    if (process.platform === 'win32') await copyFile(process.execPath, join(dir, 'gh.exe'));
+    else {
+      await writeFile(join(dir, 'gh'), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} "$@"\n`);
+      await chmod(join(dir, 'gh'), 0o755);
+    }
+    await writeFile(draft, valid);
+    await writeFile(config, JSON.stringify({ agents, specifications: { store: 'github', github: { repository: 'owner/repo', project: { owner: 'owner', number: 1 } } } }));
+    const args = ['spec', 'publish', '--repo', dir, '--config', config, '--spec', draft];
+    const run = (...extra: string[]) => spawnSync(process.execPath, ['--experimental-strip-types', resolve('src/factory-cli.ts'), ...args, ...extra], { encoding: 'utf8', env: { ...process.env, PATH: `${dir}${delimiter}${process.env.PATH ?? ''}` } });
+    assert.equal(run().status, 1);
+    await assert.rejects(readFile(calls), { code: 'ENOENT' });
+    const result = run('--approve');
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Specification published: 42 https:\/\/github\.com\/owner\/repo\/issues\/42/);
+    assert.equal(result.stderr, '');
+    assert.deepEqual(JSON.parse(await readFile(calls, 'utf8')), {
+      args: ['create', '--repo', 'owner/repo', '--title', 'Example specification', '--label', 'factory-spec', '--body-file', '-'],
+      input: valid.replace('# Example specification\n\n', '').trim(),
+    });
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('GitHub publication requires a configured repository or valid origin', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'spec-publish-github-'));
   try {
     const draft = join(dir, 'draft.md');
@@ -70,6 +100,6 @@ test('GitHub store reports that publication is not available yet', async () => {
     await writeFile(config, JSON.stringify({ agents, specifications: { store: 'github', github: { project: { owner: 'owner', number: 1 } } } }));
     const result = cli('spec', 'publish', '--repo', dir, '--config', config, '--spec', draft, '--approve');
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /GitHub specification store is not available yet/i);
+    assert.match(result.stderr, /specifications\.github\.repository/);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
