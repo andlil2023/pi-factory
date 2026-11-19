@@ -283,6 +283,7 @@ async function startCommand(flags:Record<string,string|boolean>):Promise<void> {
   if ((config.planning?.maxReviewRounds ?? 2) === 0) throw new Error('Starting requires planning.maxReviewRounds greater than zero');
   const store=await createSpecificationStore(config.specifications,repository);
   const specification=await store.fetch(id);
+  const fetchedAt=new Date().toISOString();
   const issues=validateSpecification(specification.text);
   if (issues.length) {
     for (const issue of issues) console.log(`${issue.section}: ${issue.message}`);
@@ -344,8 +345,10 @@ async function startCommand(flags:Record<string,string|boolean>):Promise<void> {
     console.log(`Review summary: ${finalReview?.summary ?? 'No review was produced.'}`);
     throw new Error(`Start refused: plan review or decisions are not clean. Plan: ${planPath}`);
   }
-  // Execution is connected by the subsequent task; do not create a run yet.
-  throw new Error('Start planning passed; execution is not yet available');
+  await executeNewRun(repository,result.plan,config,{
+    store:store.kind, id:specification.id, ...(specification.url === undefined ? {} : {url:specification.url}),
+    sha256:hash, fetchedAt, text:specification.text
+  });
 }
 
 async function runCommand(flags:Record<string,string|boolean>):Promise<void> {

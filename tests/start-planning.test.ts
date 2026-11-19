@@ -33,7 +33,7 @@ for (const scenario of ['approved', 'verdict', 'finding', 'decision'] as const) 
     assert.ok(result.stdout.includes(join(dir, '.factory', 'plans', planFile)));
     assert.ok(result.stdout.includes(join(dir, '.factory', 'plans', reviewFile)));
     assert.deepEqual(JSON.parse(await readFile(join(dir, '.factory', 'plans', reviewFile), 'utf8')), [report]);
-    if (scenario === 'approved') assert.match(result.stderr, /planning passed/);
+    if (scenario === 'approved') assert.match(result.stderr, /git rev-parse failed/i);
     else {
       assert.match(result.stderr, /refused/i);
       assert.match(result.stdout, /Review summary marker/);
