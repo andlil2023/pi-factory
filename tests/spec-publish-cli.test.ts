@@ -61,7 +61,7 @@ test('readiness exceptions warn independently, but empty or duplicate questions 
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
-test('GitHub store reports that publication is not available yet', async () => {
+test('GitHub publication requires a configured repository or valid origin', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'spec-publish-github-'));
   try {
     const draft = join(dir, 'draft.md');
@@ -70,6 +70,6 @@ test('GitHub store reports that publication is not available yet', async () => {
     await writeFile(config, JSON.stringify({ agents, specifications: { store: 'github', github: { project: { owner: 'owner', number: 1 } } } }));
     const result = cli('spec', 'publish', '--repo', dir, '--config', config, '--spec', draft, '--approve');
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /GitHub specification store is not available yet/i);
+    assert.match(result.stderr, /specifications\.github\.repository/);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });

@@ -58,6 +58,8 @@ test('custom directory, concurrent saves, and configured GitHub selection', asyn
     await writeFile(join(repo, 'outside.md'), '# Outside\n');
     assert.equal((await new LocalSpecificationStore(repo).fetch('outside.md')).title, 'Outside');
     assert.throws(() => new LocalSpecificationStore(repo, '../outside'), /specifications.local.directory/);
-    await assert.rejects(createSpecificationStore({ store: 'github' }, repo), /not available yet/i);
+    const github = await createSpecificationStore({ store: 'github', github: { repository: 'owner/repo', project: { owner: 'owner', number: 1 } } }, repo, async () => 'https://github.com/owner/repo/issues/1');
+    assert.equal(github.kind, 'github');
+    assert.deepEqual(await github.startable('1'), { ok: false, reason: 'GitHub specification startability is not implemented yet' });
   } finally { await rm(repo, { recursive: true, force: true }); }
 });

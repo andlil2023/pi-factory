@@ -10,7 +10,7 @@ async function git(cwd: string, args: string[]): Promise<string> { return comman
 
 export interface GitHubDestination { remote: string; pushUrl: string; repository: string; base: string; baseSha: string; head: string; headSha: string }
 
-function githubRepository(url: string): string {
+export function githubRepository(url: string): string {
   const match = /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?$/.exec(url);
   if (!match || match[1] === '.' || match[1] === '..' || match[2] === '.' || match[2] === '..') throw new Error('Upstream must use a credential-free github.com repository URL');
   return `${match[1]}/${match[2]}`;
