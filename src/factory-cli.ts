@@ -32,6 +32,7 @@ import { createDashboardServer } from './dashboard-server.ts';
 import { validateSpecificationsConfig, type SpecificationsConfig } from './spec-config.ts';
 import { parseSpecification, validateSpecification } from './spec-format.ts';
 import { createSpecificationStore } from './spec-store.ts';
+import { analyzeImpact } from './spec-impact.ts';
 
 interface Config {
   /** Optional specification agents fall back to planner and planReviewer/reviewer respectively. */
@@ -739,8 +740,17 @@ async function main():Promise<void> {
   const argv=process.argv.slice(2);
   if (argv[0] === 'spec') {
     const sub=argv[1];
-    if (sub !== 'check' && sub !== 'publish') throw new Error(`Unknown spec command: ${sub ?? '(missing)'}`);
+    if (sub !== 'check' && sub !== 'publish' && sub !== 'impact') throw new Error(`Unknown spec command: ${sub ?? '(missing)'}`);
     const {flags}=argsMap([sub,...argv.slice(2)]);
+    if (sub === 'impact') {
+      const repository=resolve(required(flags,'repo'));
+      required(flags,'config');
+      const specFile=resolve(required(flags,'spec'));
+      const config=await configFrom(flags);
+      await analyzeImpact({repository, specFile, factoryRoot:root, agents:config.agents, pi:piLaunch(config)});
+      console.log('Impact analysis written.');
+      return;
+    }
     if (sub === 'publish' && flags.approve !== true) throw new Error('Publishing requires --approve.');
     const text=await readFile(resolve(required(flags,'spec')),'utf8');
     const issues=validateSpecification(text, {allowOpenQuestions: sub === 'publish'});
@@ -788,7 +798,7 @@ async function main():Promise<void> {
   if(command==='replan') return replanCommand(flags);
   if(command==='amend') return amendCommand(flags);
   if(command==='integrate') return integrateCommand(flags);
-  console.log('Usage:\n  pi-factory spec check --spec FILE\n  pi-factory spec publish --repo PATH --config FILE --spec FILE --approve\n  pi-factory init --repo PATH [--force]\n  pi-factory dashboard --repo PATH [--port PORT]\n  pi-factory doctor [--config FILE] [--repo PATH]\n  pi-factory run-list --repo PATH\n  pi-factory plan --repo PATH --config FILE --objective FILE --output FILE\n  pi-factory run --repo PATH --config FILE --plan FILE --approve\n  pi-factory start --repo PATH --config FILE --spec REF [--sha256 HASH] [--new-run] --approve\n  pi-factory status --repo PATH --run RUN_ID\n  pi-factory resume --repo PATH --config FILE --run RUN_ID --approve [--retry-task TASK_ID [--guidance FILE]] [--recover-lock]\n  pi-factory replan --repo PATH --config FILE --run RUN_ID --output FILE [--guidance FILE]\n  pi-factory amend --repo PATH --run RUN_ID --plan FILE --approve\n  pi-factory integrate --repo PATH --config FILE --run RUN_ID --approve [--new-attempt] [--guidance FILE]\n  pi-factory integrate --repo PATH --config FILE --run RUN_ID --publish --candidate SHA --approve\n  pi-factory integrate --repo PATH --run RUN_ID --reconcile [--recover-lock]');
+  console.log('Usage:\n  pi-factory spec check --spec FILE\n  pi-factory spec impact --repo PATH --config FILE --spec FILE\n  pi-factory spec publish --repo PATH --config FILE --spec FILE --approve\n  pi-factory init --repo PATH [--force]\n  pi-factory dashboard --repo PATH [--port PORT]\n  pi-factory doctor [--config FILE] [--repo PATH]\n  pi-factory run-list --repo PATH\n  pi-factory plan --repo PATH --config FILE --objective FILE --output FILE\n  pi-factory run --repo PATH --config FILE --plan FILE --approve\n  pi-factory start --repo PATH --config FILE --spec REF [--sha256 HASH] [--new-run] --approve\n  pi-factory status --repo PATH --run RUN_ID\n  pi-factory resume --repo PATH --config FILE --run RUN_ID --approve [--retry-task TASK_ID [--guidance FILE]] [--recover-lock]\n  pi-factory replan --repo PATH --config FILE --run RUN_ID --output FILE [--guidance FILE]\n  pi-factory amend --repo PATH --run RUN_ID --plan FILE --approve\n  pi-factory integrate --repo PATH --config FILE --run RUN_ID --approve [--new-attempt] [--guidance FILE]\n  pi-factory integrate --repo PATH --config FILE --run RUN_ID --publish --candidate SHA --approve\n  pi-factory integrate --repo PATH --run RUN_ID --reconcile [--recover-lock]');
   if(command && command !== '--help' && command !== 'help') process.exitCode=1;
 }
 main().catch(e=>{console.error(e instanceof Error?e.stack:e);process.exitCode=1;});
