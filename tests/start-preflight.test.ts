@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
 
 const agents = { planner: { provider: 'test', model: 'test' }, implementer: { provider: 'test', model: 'test' }, reviewer: { provider: 'test', model: 'test' } };
+const pi = { executable: process.execPath, executableArgs: ['-e', 'process.exit(7)', '--'] };
 const body = '## What\nSomething\n## Why\nReason\n## Acceptance criteria\n- Works\n## Out of scope\nOther\n## Threat model\nNone\n## Open questions\nNone\n';
 const text = `# Example\n\n${body}`;
 const hash = createHash('sha256').update(text).digest('hex');
@@ -25,7 +26,7 @@ test('approval and configuration gates precede fetching, and local preflight val
     assert.match(cli([...args, '--approve']).stderr, /verification/i);
     await writeFile(config, JSON.stringify({ agents, verification: [{ executable: 'test' }], planning: { maxReviewRounds: 0 } }));
     assert.match(cli([...args, '--approve']).stderr, /planning\.maxReviewRounds/);
-    await writeFile(config, JSON.stringify({ agents, verification: [{ executable: 'test' }] }));
+    await writeFile(config, JSON.stringify({ agents, pi, verification: [{ executable: 'test' }] }));
     await writeFile(spec, '# Invalid\n');
     const invalid = cli([...args, '--approve']);
     assert.equal(invalid.status, 1);
@@ -33,14 +34,14 @@ test('approval and configuration gates precede fetching, and local preflight val
     await writeFile(spec, text);
     const valid = cli([...args, '--approve']);
     assert.equal(valid.status, 1);
-    assert.match(valid.stderr, /preflight passed/i);
+    assert.match(valid.stderr, /PI exited with code 7/i);
     const mismatch = cli([...args, '--approve', '--sha256', 'wrong']);
     assert.equal(mismatch.status, 1);
     assert.match(mismatch.stderr, /wrong/);
     assert.ok(mismatch.stderr.includes(hash));
     const matched = cli([...args, '--approve', '--sha256', hash]);
     assert.equal(matched.status, 1);
-    assert.match(matched.stderr, /preflight passed/i);
+    assert.match(matched.stderr, /PI exited with code 7/i);
     await assert.rejects(readFile(join(dir, '.factory', 'runs')), { code: 'ENOENT' });
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
@@ -51,7 +52,7 @@ test('existing specification runs block unless explicitly superseded, without mo
     const config = join(dir, 'config.json');
     const spec = join(dir, 'spec.md');
     const runs = join(dir, '.factory', 'runs');
-    await writeFile(config, JSON.stringify({ agents, verification: [{ executable: 'test' }] }));
+    await writeFile(config, JSON.stringify({ agents, pi, verification: [{ executable: 'test' }] }));
     await writeFile(spec, text);
     await mkdir(runs, { recursive: true });
     const snapshot = async (runId: string, status: string, store: string, id: string) => {
@@ -79,13 +80,13 @@ test('existing specification runs block unless explicitly superseded, without mo
     assert.match(superseded.stdout, /Superseding existing runs/);
     assert.match(superseded.stdout, /active \(running\)/);
     assert.match(superseded.stdout, /paused \(paused\)/);
-    assert.match(superseded.stderr, /preflight passed/i);
+    assert.match(superseded.stderr, /PI exited with code 7/i);
     assert.equal(await readFile(join(runs, 'active.json'), 'utf8'), original);
     assert.equal(await readFile(join(runs, 'paused.json'), 'utf8'), paused);
     await rm(join(runs, 'active.json'));
     await rm(join(runs, 'paused.json'));
     const allowed = cli(args);
-    assert.match(allowed.stderr, /preflight passed/i);
+    assert.match(allowed.stderr, /PI exited with code 7/i);
     assert.doesNotMatch(allowed.stderr, /Existing non-completed runs/);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
@@ -96,7 +97,7 @@ test('GitHub start checks readiness before exact-text consent and never starts e
     const config = join(dir, 'config.json');
     const fixture = join(dir, 'fixture.json');
     const calls = join(dir, 'calls');
-    await writeFile(config, JSON.stringify({ agents, verification: [{ executable: 'test' }], specifications: { store: 'github', github: { repository: 'owner/repo', project: { owner: 'owner', number: 1 } } } }));
+    await writeFile(config, JSON.stringify({ agents, pi, verification: [{ executable: 'test' }], specifications: { store: 'github', github: { repository: 'owner/repo', project: { owner: 'owner', number: 1 } } } }));
     await writeFile(join(dir, 'issue'), `const fs=require('node:fs'); fs.appendFileSync(${JSON.stringify(calls)}, 'fetch\\n'); const f=JSON.parse(fs.readFileSync(${JSON.stringify(fixture)},'utf8')); console.log(JSON.stringify(f.issue));`);
     await writeFile(join(dir, 'api'), `const fs=require('node:fs'); fs.appendFileSync(${JSON.stringify(calls)}, 'startable\\n'); const f=JSON.parse(fs.readFileSync(${JSON.stringify(fixture)},'utf8')); console.log(JSON.stringify({data:{repository:{issue:f.state}}}));`);
     if (process.platform === 'win32') await copyFile(process.execPath, join(dir, 'gh.exe'));
@@ -136,7 +137,7 @@ test('GitHub start checks readiness before exact-text consent and never starts e
     assert.match(matched.stderr, /github-run \(blocked\)/);
     const superseded = cli([...args, '--approve', '--sha256', hash, '--new-run'], env);
     assert.match(superseded.stdout, /github-run \(blocked\)/);
-    assert.match(superseded.stderr, /preflight passed/i);
+    assert.match(superseded.stderr, /PI exited with code 7/i);
     assert.equal(await readFile(join(runs, 'github-run.json'), 'utf8'), snapshot);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });

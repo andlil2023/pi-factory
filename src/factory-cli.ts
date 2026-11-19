@@ -324,8 +324,28 @@ async function startCommand(flags:Record<string,string|boolean>):Promise<void> {
     if (flags['new-run'] !== true) throw new Error(`Existing non-completed runs for this specification: ${names}. Use --new-run to supersede them.`);
     console.log(`Superseding existing runs: ${names}`);
   }
-  // Planning and execution are added by subsequent tasks; never create a run here.
-  throw new Error('Start preflight passed; planning and execution are not yet available');
+  const schema=await readFile(join(root,'contracts','plan.schema.json'),'utf8');
+  const objective=specification.text;
+  const result=await producePlan(config,repository,
+    `Plan the following objective. Do not modify files. Return ONLY valid JSON matching the schema.\n\nObjective:\n${objective}\n\n${planningContext(config)}\n\nSchema:\n${schema}`,
+    `Objective (the specification; authoritative):\n${objective}`);
+  const directory=join(repository,'.factory','plans');
+  const planPath=join(directory,`plan-${randomUUID()}.json`);
+  const reportPath=planPath.replace(/\.json$/,'.review.json');
+  await mkdir(directory,{recursive:true});
+  await writeFile(planPath,JSON.stringify(result.plan,null,2)+'\n',{flag:'wx'});
+  await writeFile(reportPath,JSON.stringify(result.reviews,null,2)+'\n',{flag:'wx'});
+  console.log(`Plan saved to ${planPath}`);
+  console.log(`Plan review report saved to ${reportPath}`);
+  const finalReview=result.reviews.at(-1);
+  const decisions=result.plan.decisions.filter(decision=>decision.blocking);
+  if (!finalReview || finalReview.verdict !== 'approved' || finalReview.findings.some(finding=>finding.severity === 'blocking') || decisions.length) {
+    for (const decision of decisions) console.log(`Blocking decision: ${decision.question}`);
+    console.log(`Review summary: ${finalReview?.summary ?? 'No review was produced.'}`);
+    throw new Error(`Start refused: plan review or decisions are not clean. Plan: ${planPath}`);
+  }
+  // Execution is connected by the subsequent task; do not create a run yet.
+  throw new Error('Start planning passed; execution is not yet available');
 }
 
 async function runCommand(flags:Record<string,string|boolean>):Promise<void> {
