@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { defaultSpecificationDirectory, validateSpecificationsConfig } from './spec-config.ts';
@@ -16,8 +17,8 @@ export class LocalSpecificationStore implements SpecificationStore {
   }
 
   async save(title: string, text: string): Promise<{ id: string }> {
-    const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60).replace(/-+$/, '');
-    if (!slug) throw new Error('Specification title has no letters or digits.');
+    const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60).replace(/-+$/, '')
+      || `spec-${createHash('sha256').update(title).digest('hex').slice(0, 48)}`;
     const path = resolve(this.repository, this.directory, `${slug}.md`);
     const id = relative(this.repository, path).split(sep).join('/');
     await mkdir(dirname(path), { recursive: true });
