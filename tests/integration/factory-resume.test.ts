@@ -27,7 +27,7 @@ for (const budget of [undefined, 2] as const) test(`CLI pins ${budget === undefi
   await writeFile(plan, JSON.stringify({ objective: 'Fixture', assumptions: [], decisions: [], tasks, verification: ['trusted-check'] }));
   const config = join(dir, 'config.json');
   const model = { provider: 'fixture', model: 'fixture' };
-  const settings = { agents: { planner: model, implementer: model, reviewer: model }, execution: { maxAttempts: 3, ...(budget === undefined ? {} : { maxInfraRetries: budget }) }, verification: [{ executable: process.execPath, args: ['-e', 'process.exit(0)'] }], pi: { executable: process.execPath, executableArgs: [resolve('tests/fixtures/fake-factory-agent.mjs')] } };
+  const settings = { agents: { planner: model, implementer: model, reviewer: model }, setup: [{ executable: process.execPath, args: ['-e', "require('fs').mkdirSync('.factory', {recursive:true}); require('fs').writeFileSync('.factory/setup-marker', 'ready')"] }], execution: { maxAttempts: 3, ...(budget === undefined ? {} : { maxInfraRetries: budget }) }, verification: [{ executable: process.execPath, args: ['-e', 'process.exit(0)'] }], pi: { executable: process.execPath, executableArgs: [resolve('tests/fixtures/fake-factory-agent.mjs')] } };
   await writeFile(config, JSON.stringify(settings));
   const runCli = (...args: string[]) => spawnSync(process.execPath, ['--experimental-strip-types', cli, ...args, '--config', config], { encoding: 'utf8', timeout: 180_000 });
   for (const invalid of [-1, 0.5, Number.MAX_SAFE_INTEGER + 1, '1', null]) {
@@ -45,6 +45,8 @@ for (const budget of [undefined, 2] as const) test(`CLI pins ${budget === undefi
   const statePath = join(directory, file);
   const blocked = JSON.parse(await readFile(statePath, 'utf8')) as FactoryRunState;
   const worktree = blocked.git!.worktree;
+  assert.equal(await readFile(join(worktree, '.factory', 'setup-marker'), 'utf8'), 'ready');
+  assert.equal(blocked.specification, undefined);
   assert.equal(blocked.status, 'blocked');
   assert.equal(blocked.tasks.T001.attempts.length, 1);
   assert.equal(blocked.tasks.T001.status, 'completed');

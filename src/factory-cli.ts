@@ -284,6 +284,11 @@ async function runCommand(flags:Record<string,string|boolean>):Promise<void> {
   const validation=await validator.validate<Plan>('plan',parsed,{enforceTaskSize:true});
   if(!validation.valid) throw new Error(`Invalid plan: ${JSON.stringify(validation.issues)}`);
   if(validation.value.decisions.some(d=>d.blocking)) throw new Error('Plan has unresolved blocking decisions');
+  await executeNewRun(repository,validation.value,config);
+}
+
+/** Execute a plan whose caller has already applied its approval and validation gates. */
+async function executeNewRun(repository:string,plan:Plan,config:Config,specification?:FactoryRunState['specification']):Promise<void> {
   const runId=`run-${randomUUID()}`;
   // Worktree must be created before writing state into the source repository.
   const worktree=await createWorktree({repository,runId});
@@ -294,8 +299,9 @@ async function runCommand(flags:Record<string,string|boolean>):Promise<void> {
   const store=new StateStore(repository);
   const release = await acquireRunLock(store.directory, runId);
   try {
-    const state=await store.create(repository,validation.value,validation.value.tasks.map(t=>t.id),runId, {
-      git, execution: { maxAttempts:config.execution?.maxAttempts??3, maxInfraRetries:config.execution?.maxInfraRetries??1, configurationFingerprint:configurationFingerprint(config) }
+    const state=await store.create(repository,plan,plan.tasks.map(t=>t.id),runId, {
+      git, execution: { maxAttempts:config.execution?.maxAttempts??3, maxInfraRetries:config.execution?.maxInfraRetries??1, configurationFingerprint:configurationFingerprint(config) },
+      ...(specification === undefined ? {} : { specification })
     });
     await executeRun(store, state, config);
   } finally { await release(); }
