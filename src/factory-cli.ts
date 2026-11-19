@@ -30,7 +30,8 @@ import { addIntegrationRepair, integrationRepairEligible } from './integration-r
 import { initialize } from './init.ts';
 import { createDashboardServer } from './dashboard-server.ts';
 import { validateSpecificationsConfig, type SpecificationsConfig } from './spec-config.ts';
-import { validateSpecification } from './spec-format.ts';
+import { parseSpecification, validateSpecification } from './spec-format.ts';
+import { createSpecificationStore } from './spec-store.ts';
 
 interface Config {
   /** Optional specification agents fall back to planner and planReviewer/reviewer respectively. */
@@ -654,13 +655,28 @@ async function main():Promise<void> {
   const argv=process.argv.slice(2);
   if (argv[0] === 'spec') {
     const sub=argv[1];
-    if (sub !== 'check') throw new Error(`Unknown spec command: ${sub ?? '(missing)'}`);
+    if (sub !== 'check' && sub !== 'publish') throw new Error(`Unknown spec command: ${sub ?? '(missing)'}`);
     const {flags}=argsMap([sub,...argv.slice(2)]);
-    const issues=validateSpecification(await readFile(resolve(required(flags,'spec')),'utf8'));
+    if (sub === 'publish' && flags.approve !== true) throw new Error('Publishing requires --approve.');
+    const text=await readFile(resolve(required(flags,'spec')),'utf8');
+    const issues=validateSpecification(text, {allowOpenQuestions: sub === 'publish'});
     if (issues.length) {
       for (const issue of issues) console.log(`${issue.section}: ${issue.message}`);
       process.exitCode=1;
-    } else console.log('Specification is valid.');
+      return;
+    }
+    if (sub === 'check') {
+      console.log('Specification is valid.');
+      return;
+    }
+    const repository=resolve(required(flags,'repo'));
+    const config=await configFrom(flags);
+    const store=await createSpecificationStore(config.specifications, repository);
+    const parsed=parseSpecification(text);
+    if (validateSpecification(text).some(issue => issue.section === 'Open questions')) console.warn('Warning: Open questions are unresolved.');
+    if (!parsed.hasImpactAnalysis) console.warn('Warning: Impact analysis is missing.');
+    const saved=await store.save(parsed.title,text);
+    console.log(`Specification published: ${saved.url ?? saved.id}`);
     return;
   }
   const {command,flags}=argsMap(argv);
