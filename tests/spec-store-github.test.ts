@@ -57,6 +57,33 @@ test('only matching issue URLs are accepted; errors are concise and missing labe
   });
 });
 
+test('fetch reconstructs a specification without requesting comments or an editor', async () => {
+  const calls: string[][] = [];
+  const store = new GitHubSpecificationStore({ repository: 'owner/repo', label: 'spec', project: { ...project, iterationField: 'Iteration' }, gh: async args => {
+    calls.push(args);
+    return JSON.stringify({ title: 'Example', body: '## Details\r\nBody\r\n', url: 'https://github.com/owner/repo/issues/42', updatedAt: '2025-01-02T03:04:05Z', comments: [{ body: 'ignored' }], lastEditor: 'ignored' });
+  } });
+  assert.deepEqual(await store.fetch('42'), { id: '42', title: 'Example', text: '# Example\n\n## Details\nBody\n', url: 'https://github.com/owner/repo/issues/42', updatedAt: '2025-01-02T03:04:05Z' });
+  assert.deepEqual(calls, [['issue', 'view', '42', '--repo', 'owner/repo', '--json', 'title,body,url,updatedAt']]);
+});
+
+test('fetch rejects invalid ids before invoking gh', async () => {
+  let calls = 0;
+  const store = new GitHubSpecificationStore({ repository: 'owner/repo', label: 'spec', project: { ...project, iterationField: 'Iteration' }, gh: async () => { calls++; return ''; } });
+  for (const id of ['', '0', '000', '-1', '+1', '1.2', ' 1', '1e2', '１２', '42\n', '42\r', '42\r\n']) await assert.rejects(store.fetch(id), /invalid.*id/i);
+  assert.equal(calls, 0);
+});
+
+test('fetch rejects malformed issue responses', async () => {
+  let response = '';
+  const store = new GitHubSpecificationStore({ repository: 'owner/repo', label: 'spec', project: { ...project, iterationField: 'Iteration' }, gh: async () => response });
+  const valid: Record<string, unknown> = { title: 'Title', body: '', url: 'https://github.com/owner/repo/issues/1', updatedAt: '2025-01-01T00:00:00Z' };
+  for (response of ['not json', 'null', '[]', '42', ...Object.keys(valid).flatMap(key => {
+    const missing = { ...valid }; delete missing[key];
+    return [JSON.stringify(missing), JSON.stringify({ ...valid, [key]: null }), JSON.stringify({ ...valid, [key]: 123 })];
+  })]) await assert.rejects(store.fetch('1'), /unexpected response/i);
+});
+
 test('repository derives from origin using GitHub PR URL rules and errors name configuration', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'spec-origin-'));
   try {

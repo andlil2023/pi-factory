@@ -70,6 +70,17 @@ export class GitHubSpecificationStore implements SpecificationStore {
     return { id, url };
   }
 
-  async fetch(_id: string): Promise<StoredSpecification> { throw new Error('GitHub specification fetch is not implemented yet'); }
+  async fetch(id: string): Promise<StoredSpecification> {
+    if (/[^0-9]/.test(id) || !/[1-9]/.test(id)) throw new Error(`Invalid GitHub issue id: ${id}`);
+    const response = await this.options.gh(['issue', 'view', id, '--repo', this.options.repository, '--json', 'title,body,url,updatedAt']);
+    let issue: unknown;
+    try { issue = JSON.parse(response); } catch { throw new Error('GitHub returned an unexpected response'); }
+    if (!issue || typeof issue !== 'object' || Array.isArray(issue)) throw new Error('GitHub returned an unexpected response');
+    const fields = issue as Record<string, unknown>;
+    if (typeof fields.title !== 'string' || typeof fields.body !== 'string' || typeof fields.url !== 'string' || typeof fields.updatedAt !== 'string') {
+      throw new Error('GitHub returned an unexpected response');
+    }
+    return { id, title: fields.title, url: fields.url, updatedAt: fields.updatedAt, text: `# ${fields.title}\n\n${fields.body}`.replace(/\r\n/g, '\n') };
+  }
   async startable(_id: string): Promise<Startable> { return { ok: false, reason: 'GitHub specification startability is not implemented yet' }; }
 }

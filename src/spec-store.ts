@@ -5,7 +5,7 @@ import { githubRepository } from './github-pr.ts';
 import { GitHubSpecificationStore, ghRunner, type GhRunner } from './spec-store-github.ts';
 import { LocalSpecificationStore } from './spec-store-local.ts';
 
-export interface StoredSpecification { id: string; title: string; text: string; url?: string }
+export interface StoredSpecification { id: string; title: string; text: string; url?: string; updatedAt?: string }
 export type Startable = { ok: true } | { ok: false; reason: string };
 export interface SpecificationStore {
   readonly kind: 'local' | 'github';
