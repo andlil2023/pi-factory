@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { FactoryEventBus } from './event-bus.ts';
-import { readFile, writeFile, mkdir, realpath, access, stat } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, realpath, access, stat, readdir } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -303,6 +303,26 @@ async function startCommand(flags:Record<string,string|boolean>):Promise<void> {
   if (flags.sha256 !== undefined) {
     const supplied=required(flags,'sha256');
     if (supplied !== hash) throw new Error(`Specification SHA-256 mismatch: supplied ${supplied}; fetched ${hash}`);
+  }
+  const states=new StateStore(repository);
+  let entries:string[];
+  try { entries=await readdir(states.directory); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    entries=[];
+  }
+  const matches:FactoryRunState[]=[];
+  for (const entry of entries.sort()) {
+    if (!entry.endsWith('.json')) continue;
+    let state:FactoryRunState;
+    try { state=await states.load(entry.slice(0,-5)); }
+    catch { continue; } // A malformed or unreadable snapshot must not prevent a start.
+    if (state.status !== 'completed' && state.specification?.store === store.kind && state.specification.id === specification.id) matches.push(state);
+  }
+  if (matches.length) {
+    const names=matches.map(state=>`${state.runId} (${state.status})`).join(', ');
+    if (flags['new-run'] !== true) throw new Error(`Existing non-completed runs for this specification: ${names}. Use --new-run to supersede them.`);
+    console.log(`Superseding existing runs: ${names}`);
   }
   // Planning and execution are added by subsequent tasks; never create a run here.
   throw new Error('Start preflight passed; planning and execution are not yet available');
