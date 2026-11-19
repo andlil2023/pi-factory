@@ -22,7 +22,28 @@ test('local store saves without overwriting and fetches exact text by either pat
     assert.deepEqual(await store.fetch(absolute), { id: absolute, title: 'Real Title', text });
     assert.deepEqual(await store.startable('anything'), { ok: true });
     await assert.rejects(store.fetch('missing.md'), /Specification not found: missing\.md/);
-    await assert.rejects(store.save('???', text), /title has no letters or digits/);
+  } finally { await rm(repo, { recursive: true, force: true }); }
+});
+
+test('local store uses safe deterministic fallback names without overwriting', async () => {
+  const repo = await mkdtemp(join(tmpdir(), 'spec-store-'));
+  try {
+    const store = new LocalSpecificationStore(repo);
+    const titles = ['日本語', '???', '', '🎉'];
+    const ids = new Set<string>();
+    for (const title of titles) {
+      const { id } = await store.save(title, title);
+      assert.match(id, /^\.factory\/specs\/spec-[a-f0-9]{48}\.md$/);
+      assert.ok(!ids.has(id));
+      ids.add(id);
+      await assert.rejects(store.save(title, 'replacement'), /already exists/);
+      assert.equal(await readFile(join(repo, id), 'utf8'), title);
+    }
+    // An existing ASCII slug can also occupy a fallback path.
+    const fallbackSlug = [...ids][0].split('/').pop()!.replace(/\.md$/, '');
+    await assert.rejects(store.save(fallbackSlug, 'replacement'), /already exists/);
+    assert.equal(await readFile(join(repo, [...ids][0]), 'utf8'), titles[0]);
+    assert.equal((await store.save('  Hello, WORLD!  ', 'text')).id, '.factory/specs/hello-world.md');
   } finally { await rm(repo, { recursive: true, force: true }); }
 });
 
