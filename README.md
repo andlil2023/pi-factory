@@ -2,16 +2,16 @@
 
 PI Factory orchestrates planning, implementation, verification and independent review in isolated run worktrees, with explicit operator approval gates. The persisted state store is authoritative; lifecycle event logs are observational and do not stream individual Pi tokens or tool calls.
 
-Start with the [operator quick-start](docs/operator-quick-start.md) for a planning-only workflow and read-only diagnostics.
+Start with the [Windows installed-tool quick-start](docs/operator-quick-start.md) for prerequisites, tag installation, configuration, planning, approval, execution, optional skills and upgrades. The CLI works without skills; Pi remains the factory's separate agent runtime.
 
 ## Read-only dashboard
 
 The dashboard shows automatic plan revisions and highlights attempts that passed verification only on a rerun.
 
-Start the dashboard separately from the factory (Node with `--experimental-strip-types` support is required):
+Start the installed dashboard separately from execution (Node 24.12.0 or newer is required):
 
-```sh
-node --experimental-strip-types src/dashboard-server.ts PATH_TO_TARGET_REPOSITORY [PORT]
+```powershell
+pi-factory dashboard --repo PATH_TO_TARGET_REPOSITORY --port 3000
 ```
 
 The repository argument is required; the optional port defaults to 3000 and must be 1–65535. Open `http://127.0.0.1:3000/` (substitute the chosen port). The page refreshes persisted state every five seconds and offers a manual refresh. Running means the **last persisted state**, not proof that a process is still alive. Lifecycle events are observational snapshots and never change status. Missing, invalid, partial, or oversized state is shown as unavailable.
@@ -37,14 +37,14 @@ Each new run records its worktree, run branch, target branch (the original repos
 Use the original configuration when resuming:
 
 ```powershell
-npm run factory -- status --repo PATH --run RUN_ID
-npm run factory -- resume --repo PATH --run RUN_ID --config CONFIG_FILE --approve
+pi-factory status --repo PATH --run RUN_ID
+pi-factory resume --repo PATH --run RUN_ID --config CONFIG_FILE --approve
 ```
 
 If a task failed or was interrupted, inspect its worktree and findings first, resolve any decisions outside the factory, then explicitly authorize a fresh repair session:
 
 ```powershell
-npm run factory -- resume --repo PATH --run RUN_ID --config CONFIG_FILE --retry-task T002 --approve
+pi-factory resume --repo PATH --run RUN_ID --config CONFIG_FILE --retry-task T002 --approve
 ```
 
 Failed edits are preserved; no reset, checkout, automatic merge, or cleanup is performed. Completed tasks are not replayed. Attempt history, specialist requirements, and the original retry budget survive resume; exhausted budgets cannot be reset or increased. Verification and required review run again for repaired work. Failed final verification can be retried with a clean worktree after all tasks completed; code changes need separately authorized work rather than reopening completed tasks.
@@ -71,10 +71,10 @@ To split or revise a task without losing accepted work:
 
 ```powershell
 # Read-only: the planner proposes a complete revised plan
-npm run factory -- replan --repo PATH --run RUN_ID --config CONFIG_FILE --output revised-plan.json [--guidance FILE]
-# Review revised-plan.json, then apply it and continue
-npm run factory -- amend --repo PATH --run RUN_ID --plan revised-plan.json --approve
-npm run factory -- resume --repo PATH --run RUN_ID --config CONFIG_FILE --approve
+pi-factory replan --repo PATH --run RUN_ID --config CONFIG_FILE --output revised-plan.json
+# Optionally add --guidance FILE. Review revised-plan.json, then apply it and continue
+pi-factory amend --repo PATH --run RUN_ID --plan revised-plan.json --approve
+pi-factory resume --repo PATH --run RUN_ID --config CONFIG_FILE --approve
 ```
 
 `amend` accepts a hand-edited plan too. Completed tasks must stay unchanged. A task with attempts is either kept unchanged or removed and replaced by tasks with new IDs; its attempt history moves to `supersededTasks` and the old plan to `planRevisions`. A manual `amend` never cleans the worktree: if the superseded task left edits, inspect and remove them yourself before `resume`.
@@ -160,11 +160,11 @@ Integration has two separately approved stages, using the same configuration as 
 
 ```powershell
 # Prepare a merge candidate; does NOT update the target branch
-npm run factory -- integrate --repo PATH --run RUN_ID --config CONFIG_FILE --approve
+pi-factory integrate --repo PATH --run RUN_ID --config CONFIG_FILE --approve
 
 # Inspect the candidate SHA, reports, and worktree, then explicitly publish it
 # With a GitHub upstream this opens a PR; without any remote it updates the local target
-npm run factory -- integrate --repo PATH --run RUN_ID --config CONFIG_FILE --publish --candidate EXACT_SHA --approve
+pi-factory integrate --repo PATH --run RUN_ID --config CONFIG_FILE --publish --candidate EXACT_SHA --approve
 ```
 
 Only completed runs with passing final verification are eligible. Preparation creates `factory-integration/<run-id>-<attempt>` in a separate sibling `.factory-integrations/` directory, merging the pinned run tip into the **current** recorded target tip. It runs trusted verification and fresh independent review against the cumulative target-to-candidate diff and all original acceptance criteria. Configured rendered UI evidence is collected when UI review is selected. Specialist requirements and findings survive new integration attempts. Each validated reviewer report is persisted before the next reviewer starts, so a later timeout/invalid response cannot erase earlier findings. Fresh reviewers receive prior findings as explicitly untrusted evidence to reassess against the current candidate. A complete exact-set unanimous result is still required for acceptance. The source run branch and target worktree are not changed by preparation.
@@ -180,7 +180,7 @@ An opened PR is recorded as `pr-opened`, not as a completed merge. **The factory
 After the PR is merged externally, reconcile its recorded GitHub status:
 
 ```powershell
-npm run factory -- integrate --repo PATH --run RUN_ID --reconcile
+pi-factory integrate --repo PATH --run RUN_ID --reconcile
 ```
 
 Reconciliation reads GitHub; it does not merge the PR or perform GitHub writes. It requires neither `--approve` nor a configuration file, and cannot be combined with `--publish`, `--candidate`, `--new-attempt`, or `--guidance`. It uses the repository integration and run locks; add `--recover-lock` when appropriate.
@@ -206,7 +206,7 @@ Preparation/publication use both the run lock and a repository-wide integration 
 When inspection identifies missing decisions or evidence locations, provide an operator-authored file on preparation (or an explicitly approved fresh attempt):
 
 ```powershell
-npm run factory -- integrate --repo PATH --run RUN_ID --config CONFIG_FILE --new-attempt --guidance FILE --approve
+pi-factory integrate --repo PATH --run RUN_ID --config CONFIG_FILE --new-attempt --guidance FILE --approve
 ```
 
 Omit `--new-attempt` for the first candidate. Guidance is limited to 20,000 characters, saved with the attempt before checks/review, and retained for later attempts. It cannot be added during `--publish`; changed context requires a fresh candidate and review within the original attempt budget. Do not include secrets. Use explicit absolute paths for relevant local artifacts: `.factory/` and other ignored files are not copied into integration worktrees. Paths are references, not snapshots; the factory does not copy, authenticate or refresh arbitrary external artifacts.
