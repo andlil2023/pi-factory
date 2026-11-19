@@ -676,7 +676,7 @@ async function main():Promise<void> {
     if (validateSpecification(text).some(issue => issue.section === 'Open questions')) console.warn('Warning: Open questions are unresolved.');
     if (!parsed.hasImpactAnalysis) console.warn('Warning: Impact analysis is missing.');
     const saved=await store.save(parsed.title,text);
-    console.log(`Specification published: ${saved.url ?? saved.id}`);
+    console.log(`Specification published: ${saved.url ? `${saved.id} ${saved.url}` : saved.id}`);
     return;
   }
   const {command,flags}=argsMap(argv);
